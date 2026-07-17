@@ -15,21 +15,30 @@ use crate::proof::ProfileProof;
 use crate::slot::SlotId;
 use crate::value::Value;
 
-/// The leaf a slot occupies: its already-encoded value bytes.
+/// The leaf a slot occupies: its slot key plus its already-encoded value bytes.
 ///
-/// The SMT hashes this into a 32-byte digest via [`SmtValue::to_h256`], applying the leaf domain
-/// prefix. An empty blob is the canonical "absent slot" and hashes to zero, which the tree treats
-/// as no-leaf — the basis for non-membership proofs.
+/// The SMT hashes this into a 32-byte digest via [`SmtValue::to_h256`] as
+/// `sha256(0x01 ‖ slot_key ‖ encoded_value)` — the slot key is carried on the leaf so the hash can
+/// bind it (see [`crate::hash`] for why). An empty blob is the canonical "absent slot" and hashes to
+/// zero regardless of the key, which the tree treats as no-leaf — the basis for non-membership
+/// proofs. `zero()` (the tree's default for an untouched key) has an empty blob and so hashes to
+/// zero, matching an absent slot.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct LeafValue(Vec<u8>);
+struct LeafValue {
+    slot_key: [u8; 32],
+    encoded: Vec<u8>,
+}
 
 impl SmtValue for LeafValue {
     fn to_h256(&self) -> H256 {
-        H256::from(hash_leaf_value(&self.0))
+        H256::from(hash_leaf_value(&self.slot_key, &self.encoded))
     }
 
     fn zero() -> Self {
-        LeafValue(Vec::new())
+        LeafValue {
+            slot_key: [0u8; 32],
+            encoded: Vec::new(),
+        }
     }
 }
 
@@ -54,8 +63,9 @@ impl ProfileTree {
 
     /// Sets `slot` to a pre-encoded value blob (used when relaying bytes without re-decoding them).
     pub fn set_encoded(&mut self, slot: SlotId, encoded: Vec<u8>) -> Result<()> {
+        let slot_key = slot.key();
         self.smt
-            .update(H256::from(slot.key()), LeafValue(encoded))
+            .update(H256::from(slot_key), LeafValue { slot_key, encoded })
             .map(|_| ())
             .map_err(|e| Error::Smt(e.to_string()))
     }
@@ -71,10 +81,10 @@ impl ProfileTree {
             .smt
             .get(&H256::from(slot.key()))
             .map_err(|e| Error::Smt(e.to_string()))?;
-        Ok(if leaf.0.is_empty() {
+        Ok(if leaf.encoded.is_empty() {
             None
         } else {
-            Some(leaf.0)
+            Some(leaf.encoded)
         })
     }
 

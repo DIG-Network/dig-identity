@@ -83,3 +83,46 @@ pub fn evaluate_pairing(store: &StoreRecord, singleton: &IdentitySingleton) -> P
 pub fn is_authoritative_profile(store: &StoreRecord, singleton: &IdentitySingleton) -> bool {
     evaluate_pairing(store, singleton).is_authoritative()
 }
+
+/// Returns `true` iff the chip35 DataLayer `store` belongs to the identity `singleton`.
+///
+/// The domain-named form of [`is_authoritative_profile`], answering the question consumers ask
+/// verbatim — "does this store belong to this DID?". It holds IFF BOTH links of the pairing
+/// predicate hold: the store's `description` names the DID (discovery) AND the store's launcher coin
+/// was launched from the DID singleton (launch-from-DID lineage). Description-only or lineage-only
+/// returns `false`.
+pub fn store_belongs_to_did(store: &StoreRecord, singleton: &IdentitySingleton) -> bool {
+    is_authoritative_profile(store, singleton)
+}
+
+/// A portable, self-verifying attestation that a chip35 store belongs to a DID.
+///
+/// It carries both caller-supplied records (built from canonical `chia-protocol` types), so a third
+/// party can re-run the pairing predicate independently — [`StoreOwnershipProof::verify`] holds IFF
+/// BOTH `store.description == did:chia:<launcher_id>` AND the launch-from-DID lineage
+/// `store.launcher_coin.parent_coin_info == singleton.coin_id`. There is no hidden state: the proof
+/// IS the two records, and verification is the same predicate every consumer runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreOwnershipProof {
+    /// The identity singleton the store claims to belong to.
+    pub singleton: IdentitySingleton,
+    /// The candidate profile store record.
+    pub store: StoreRecord,
+}
+
+impl StoreOwnershipProof {
+    /// Binds a `(singleton, store)` pair into a portable ownership attestation.
+    pub fn new(singleton: IdentitySingleton, store: StoreRecord) -> Self {
+        StoreOwnershipProof { singleton, store }
+    }
+
+    /// Re-evaluates both pairing links, reporting each independently (for diagnostics).
+    pub fn outcome(&self) -> PairingOutcome {
+        evaluate_pairing(&self.store, &self.singleton)
+    }
+
+    /// Returns `true` iff the attested store genuinely belongs to the attested DID (BOTH links).
+    pub fn verify(&self) -> bool {
+        store_belongs_to_did(&self.store, &self.singleton)
+    }
+}

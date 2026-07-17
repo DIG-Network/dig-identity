@@ -40,9 +40,15 @@ pub enum Error {
     #[error("sparse-merkle-tree error: {0}")]
     Smt(String),
 
-    /// A serialized proof blob was malformed and could not be parsed.
-    #[error("malformed proof blob: {0}")]
-    MalformedProof(&'static str),
+    /// A composed profile-field verification was declined because the supplied store is NOT the
+    /// DID's authoritative profile (the DID↔store pairing predicate failed — see [`crate::pairing`]).
+    #[error("store is not the DID's authoritative profile (pairing predicate failed)")]
+    NotAuthoritativeProfile,
+
+    /// A composed profile-field verification was declined because the merkle proof did not verify
+    /// the claimed value (or absence) against the supplied profile root.
+    #[error("profile-field merkle proof did not verify against the profile root")]
+    FieldProofRejected,
 }
 
 /// A `Result` specialized to this crate's [`Error`].

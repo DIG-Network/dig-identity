@@ -71,6 +71,16 @@ impl Profile {
         self.utf8(standard::BIO)
     }
 
+    /// The XCH receive address (slot `0x0008`), if present and a canonical mainnet `xch1…` address.
+    ///
+    /// Returns `None` when the slot is unset, is not UTF-8, or does not decode as a canonical XCH
+    /// address (wrong HRP / bad Bech32m checksum / non-32-byte payload) — so a caller can safely use
+    /// the returned string as a payment destination (the $DIG-payments seam, [`crate::xch`]).
+    pub fn xch_address(&self) -> Option<&str> {
+        let raw = self.utf8(standard::XCH_ADDRESS)?;
+        crate::xch::is_valid_xch_address(raw).then_some(raw)
+    }
+
     /// Extracts the cryptographic-key view from the standard key slots (the DID→keys resolution).
     pub fn resolve_keys(&self) -> DidKeys {
         DidKeys {

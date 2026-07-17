@@ -78,6 +78,10 @@ pub mod standard {
     pub const LOCATION: SlotId = SlotId(0x0006);
     /// UTF-8 newline-separated social/verification links.
     pub const LINKS: SlotId = SlotId(0x0007);
+    /// UTF-8 canonical mainnet XCH receive address (`xch1…`, bech32m). The $DIG-payments seam:
+    /// tip or pay the identity. Validated as a canonical `xch` address on read
+    /// ([`crate::xch::parse_xch_address`]).
+    pub const XCH_ADDRESS: SlotId = SlotId(0x0008);
 
     /// 32-byte Ed25519 signing public key. Feeds DID→keys resolution (dig-chat, dig-node).
     pub const SIGNING_PUBLIC_KEY: SlotId = SlotId(0x0010);

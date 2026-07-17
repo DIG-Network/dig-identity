@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least privilege: CI only reads the checked-out repo (GHAS/CodeQL requirement).
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -42,6 +46,11 @@ jobs:
       # tests assume serial execution).
       - name: Run tests (nextest, flaky-aware)
         run: cargo nextest run --all-features --retries 2 --test-threads=1
+
+      # nextest does NOT run doctests, so the headline `lib.rs` example is ungated
+      # by the step above. Run it explicitly so a doc example can never rot.
+      - name: Run doctests
+        run: cargo test --doc --all-features
 
       - name: Check documentation
         run: cargo doc --no-deps --all-features

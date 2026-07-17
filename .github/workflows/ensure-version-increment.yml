@@ -12,6 +12,10 @@ on:
     branches:
       - main
 
+# Least privilege: the version check only reads the checked-out branches (GHAS/CodeQL requirement).
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}
   cancel-in-progress: true

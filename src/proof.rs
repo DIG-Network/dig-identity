@@ -43,7 +43,7 @@ pub fn verify_membership(
     value: &Value,
     proof: &ProfileProof,
 ) -> Result<bool> {
-    let leaf_hash = hash_leaf_value(&value.encode());
+    let leaf_hash = hash_leaf_value(&slot.key(), &value.encode());
     verify_leaf(root, slot, leaf_hash, proof)
 }
 

@@ -358,3 +358,224 @@ fn lineage_only_is_rejected() {
     assert!(outcome.authority_matches);
     assert!(!outcome.is_authoritative());
 }
+
+// ---------- leaf-hash slot-key binding (B4 domain separation) ----------
+
+#[test]
+fn leaf_digest_binds_the_slot_key() {
+    use dig_identity::hash::{hash_leaf_value, sha256, LEAF_DOMAIN};
+    let encoded = Value::Utf8("Ada".into()).encode();
+
+    // KAT: leaf_digest = sha256(0x01 ‖ slot_key ‖ encoded_value).
+    let key_a = standard::DISPLAY_NAME.key();
+    let mut preimage = vec![LEAF_DOMAIN];
+    preimage.extend_from_slice(&key_a);
+    preimage.extend_from_slice(&encoded);
+    assert_eq!(hash_leaf_value(&key_a, &encoded), sha256(&preimage));
+
+    // The SAME encoded value at a DIFFERENT slot yields a DIFFERENT leaf digest — the binding.
+    let key_b = standard::BIO.key();
+    assert_ne!(
+        hash_leaf_value(&key_a, &encoded),
+        hash_leaf_value(&key_b, &encoded)
+    );
+
+    // An absent (empty) value hashes to zero regardless of the slot key.
+    assert_eq!(hash_leaf_value(&key_a, &[]), [0u8; 32]);
+    assert_eq!(hash_leaf_value(&key_b, &[]), [0u8; 32]);
+}
+
+// ---------- xch_address standard field (slot 0x0008) ----------
+
+fn xch_address_string(payload: [u8; 32]) -> String {
+    Address::new(Bytes32::from(payload), "xch".to_string())
+        .encode()
+        .unwrap()
+}
+
+#[test]
+fn xch_address_accessor_accepts_a_canonical_mainnet_address() {
+    let addr = xch_address_string([0x55; 32]);
+    let mut profile = Profile::with_schema_v1();
+    profile.set(standard::XCH_ADDRESS, Value::Utf8(addr.clone()));
+    assert_eq!(profile.xch_address(), Some(addr.as_str()));
+    // Provable against the root like any other field.
+    let tree = profile.build_tree().unwrap();
+    let proof = tree.prove_membership(standard::XCH_ADDRESS).unwrap();
+    assert!(verify_membership(
+        &tree.root(),
+        standard::XCH_ADDRESS,
+        &Value::Utf8(addr),
+        &proof
+    )
+    .unwrap());
+}
+
+#[test]
+fn xch_address_accessor_rejects_non_canonical_values() {
+    use dig_identity::xch::{is_valid_xch_address, parse_xch_address};
+    // Wrong HRP (a testnet txch address), a DID string, and garbage are all rejected.
+    let txch = Address::new(Bytes32::from([0x66; 32]), "txch".to_string())
+        .encode()
+        .unwrap();
+    assert!(!is_valid_xch_address(&txch));
+    assert!(!is_valid_xch_address(&did_string([0x77; 32])));
+    assert!(!is_valid_xch_address("not-an-address"));
+    // A canonical address round-trips through the parser (trimmed).
+    let addr = xch_address_string([0x55; 32]);
+    assert_eq!(parse_xch_address(&format!("  {addr} ")), Some(addr.clone()));
+
+    // The accessor returns None for a present-but-invalid slot value.
+    let mut profile = Profile::new();
+    profile.set(standard::XCH_ADDRESS, Value::Utf8(txch));
+    assert_eq!(profile.xch_address(), None);
+    // ...and None when the slot is absent.
+    assert_eq!(Profile::new().xch_address(), None);
+}
+
+// ---------- store_belongs_to_did + StoreOwnershipProof ----------
+
+#[test]
+fn store_belongs_to_did_and_ownership_proof_require_both_links() {
+    use dig_identity::{store_belongs_to_did, StoreOwnershipProof};
+    let authoritative = StoreRecord {
+        description: did_string([0x22; 32]),
+        launcher_coin: launcher_coin(SINGLETON_COIN_ID),
+    };
+    assert!(store_belongs_to_did(&authoritative, &singleton()));
+    let proof = StoreOwnershipProof::new(singleton(), authoritative);
+    assert!(proof.verify());
+    assert!(proof.outcome().is_authoritative());
+
+    // Description-only (wrong lineage) and lineage-only (wrong description) both fail.
+    let desc_only = StoreRecord {
+        description: did_string([0x22; 32]),
+        launcher_coin: launcher_coin([0xBB; 32]),
+    };
+    assert!(!store_belongs_to_did(&desc_only, &singleton()));
+    assert!(!StoreOwnershipProof::new(singleton(), desc_only).verify());
+
+    let lineage_only = StoreRecord {
+        description: did_string([0x99; 32]),
+        launcher_coin: launcher_coin(SINGLETON_COIN_ID),
+    };
+    assert!(!StoreOwnershipProof::new(singleton(), lineage_only).verify());
+}
+
+// ---------- composed verify_profile_field_for_did ----------
+
+/// An authoritative store for the test `singleton()` plus a profile committed to its root.
+fn authoritative_profile() -> (StoreRecord, Profile) {
+    let store = StoreRecord {
+        description: did_string([0x22; 32]),
+        launcher_coin: launcher_coin(SINGLETON_COIN_ID),
+    };
+    let mut profile = Profile::with_schema_v1();
+    profile.set(standard::DISPLAY_NAME, Value::Utf8("Ada".into()));
+    (store, profile)
+}
+
+#[test]
+fn composed_verify_accepts_a_genuine_field() {
+    use dig_identity::verify_profile_field_for_did;
+    let (store, profile) = authoritative_profile();
+    let tree = profile.build_tree().unwrap();
+    let root = tree.root();
+    let proof = tree.prove_membership(standard::DISPLAY_NAME).unwrap();
+
+    assert_eq!(
+        verify_profile_field_for_did(
+            &singleton(),
+            &store,
+            &root,
+            standard::DISPLAY_NAME,
+            &Value::Utf8("Ada".into()),
+            &proof,
+        ),
+        Ok(true)
+    );
+}
+
+#[test]
+fn composed_verify_errors_when_store_is_not_authoritative() {
+    use dig_identity::{verify_profile_field_for_did, Error};
+    let (_, profile) = authoritative_profile();
+    let tree = profile.build_tree().unwrap();
+    let root = tree.root();
+    let proof = tree.prove_membership(standard::DISPLAY_NAME).unwrap();
+    // Discovery matches but lineage does not — a spoofed store.
+    let spoof = StoreRecord {
+        description: did_string([0x22; 32]),
+        launcher_coin: launcher_coin([0xBB; 32]),
+    };
+    assert_eq!(
+        verify_profile_field_for_did(
+            &singleton(),
+            &spoof,
+            &root,
+            standard::DISPLAY_NAME,
+            &Value::Utf8("Ada".into()),
+            &proof,
+        ),
+        Err(Error::NotAuthoritativeProfile)
+    );
+}
+
+#[test]
+fn composed_verify_errors_on_a_tampered_value() {
+    use dig_identity::{verify_profile_field_for_did, Error};
+    let (store, profile) = authoritative_profile();
+    let tree = profile.build_tree().unwrap();
+    let root = tree.root();
+    let proof = tree.prove_membership(standard::DISPLAY_NAME).unwrap();
+    assert_eq!(
+        verify_profile_field_for_did(
+            &singleton(),
+            &store,
+            &root,
+            standard::DISPLAY_NAME,
+            &Value::Utf8("Mallory".into()), // wrong value
+            &proof,
+        ),
+        Err(Error::FieldProofRejected)
+    );
+}
+
+#[test]
+fn composed_absent_verify_accepts_and_rejects() {
+    use dig_identity::{verify_profile_field_absent_for_did, Error};
+    let (store, profile) = authoritative_profile();
+    let tree = profile.build_tree().unwrap();
+    let root = tree.root();
+
+    // Accepts a genuine absence.
+    let absent = tree
+        .prove_non_membership(standard::ENCRYPTION_PUBLIC_KEY)
+        .unwrap();
+    assert_eq!(
+        verify_profile_field_absent_for_did(
+            &singleton(),
+            &store,
+            &root,
+            standard::ENCRYPTION_PUBLIC_KEY,
+            &absent,
+        ),
+        Ok(true)
+    );
+
+    // Rejects when the store is not authoritative.
+    let spoof = StoreRecord {
+        description: did_string([0x99; 32]), // wrong DID
+        launcher_coin: launcher_coin(SINGLETON_COIN_ID),
+    };
+    assert_eq!(
+        verify_profile_field_absent_for_did(
+            &singleton(),
+            &spoof,
+            &root,
+            standard::ENCRYPTION_PUBLIC_KEY,
+            &absent,
+        ),
+        Err(Error::NotAuthoritativeProfile)
+    );
+}

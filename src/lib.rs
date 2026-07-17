@@ -21,7 +21,9 @@
 //! | Serializable proofs + root-only verification | [`proof`] |
 //! | The profile reader/writer + key resolution | [`profile`] / [`keys`] |
 //! | The identity anchor (DID) + discovery parse | [`did`] |
-//! | The DID↔store bidirectional-pairing predicate | [`pairing`] |
+//! | The canonical XCH receive-address field codec | [`xch`] |
+//! | The DID↔store bidirectional-pairing predicate + ownership proof | [`pairing`] |
+//! | Composed "this datum belongs to this DID" verification | [`verify`] |
 //!
 //! ## Proving a field against a root
 //!
@@ -54,12 +56,15 @@ pub mod proof;
 pub mod slot;
 pub mod tree;
 pub mod value;
+pub mod verify;
+pub mod xch;
 
 pub use did::{parse_did_from_description, Did};
 pub use error::{Error, Result};
 pub use keys::DidKeys;
 pub use pairing::{
-    evaluate_pairing, is_authoritative_profile, IdentitySingleton, PairingOutcome, StoreRecord,
+    evaluate_pairing, is_authoritative_profile, store_belongs_to_did, IdentitySingleton,
+    PairingOutcome, StoreOwnershipProof, StoreRecord,
 };
 
 // Re-export the canonical Chia types the public API speaks, so consumers pin the same versions.
@@ -69,3 +74,5 @@ pub use proof::{verify_membership, verify_non_membership, ProfileProof};
 pub use slot::SlotId;
 pub use tree::ProfileTree;
 pub use value::{Value, ValueTag};
+pub use verify::{verify_profile_field_absent_for_did, verify_profile_field_for_did};
+pub use xch::{is_valid_xch_address, parse_xch_address};

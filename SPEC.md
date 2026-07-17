@@ -54,6 +54,7 @@ even though ids fit in `u16`.
 | `0x0005` | pronouns | UTF-8 |
 | `0x0006` | location | UTF-8 |
 | `0x0007` | links | UTF-8 (newline-separated) |
+| `0x0008` | xch_address | UTF-8 (canonical mainnet `xch1…` bech32m) |
 | `0x0010` | signing_public_key | Bytes (32, Ed25519) |
 | `0x0011` | encryption_public_key | Bytes (32, X25519 IK) |
 | `0x0012` | peer_id | Bytes (32, `SHA-256(TLS SPKI DER)`) |
@@ -62,6 +63,13 @@ even though ids fit in `u16`.
 
 Slots `0x0010`–`0x0013` are the DID→keys resolution set consumed by dig-chat and the dig-node
 identity subsystem.
+
+Slot `0x0008` (`xch_address`) is the identity's XCH receive address — the $DIG-payments seam (tip
+or pay an identity). Its value is the bech32m address string, and a reader MUST accept it only when
+it decodes as a **canonical mainnet XCH address**: the human-readable prefix is exactly `xch`, the
+Bech32m checksum verifies, and the payload is a 32-byte puzzle hash. Validation MUST use the
+canonical bech32m address codec (`chia-sdk-utils::Address`); a wrong HRP (e.g. testnet `txch`), a bad
+checksum, or a non-32-byte payload is REJECTED (the typed accessor returns absent).
 
 ### 2.3 Reserved ranges
 
@@ -84,13 +92,25 @@ reject the profile, so an older reader keeps functioning against a newer writer'
 All hashing is sha256. Three domains are kept separate:
 
 - **Slot key** — `sha256("dig-identity:slot:" ‖ u32_be(slot_id))` (§2.1).
-- **Leaf value** — a slot's leaf digest is `sha256(0x01 ‖ encoded_value)`, where `0x01` is the leaf
-  domain byte and `encoded_value` is the §4 encoding. An ABSENT slot has an empty `encoded_value` and
-  its leaf digest is the all-zero 32-byte value; the SMT treats an all-zero leaf as no-leaf, which is
-  what makes non-membership provable.
+- **Leaf value** — a slot's leaf digest is `sha256(0x01 ‖ slot_key ‖ encoded_value)`, where `0x01` is
+  the leaf domain byte, `slot_key` is the slot's 32-byte key (§2.1), and `encoded_value` is the §4
+  encoding. An ABSENT slot has an empty `encoded_value` and its leaf digest is the all-zero 32-byte
+  value (regardless of `slot_key`); the SMT treats an all-zero leaf as no-leaf, which is what makes
+  non-membership provable.
 - **Branch node** — branch nodes are hashed by the Nervos construction using sha256, with the crate's
   own merge domain-separation bytes (`0x01` normal-merge, `0x02` merge-with-zero). Implementations
   MUST reuse this construction; it is not re-specified here.
+
+**Leaf/branch domain separation (rationale).** The `0x01` leaf-domain byte alone does NOT guarantee
+non-confusion between a leaf preimage and a branch preimage: the Nervos `MERGE_NORMAL` branch preimage
+also begins with `0x01`, and because a `Bytes` value payload (§4) is attacker-chosen, a leaf preimage
+could in principle be crafted byte-identical to a branch preimage. That collision is non-exploitable
+in a merkle proof because the verifier folds every leaf from height 0 up to 256 — its **depth
+accounting**, not the leading byte, is what actually separates leaves from branches. To make the
+separation SELF-CONTAINED (independent of the tree crate's internals, for a second JS/wasm
+implementation), the 32-byte `slot_key` is bound into the leaf preimage: a leaf preimage carries the
+fixed `dig-identity` slot key that no branch preimage carries. This binding is part of the FROZEN v1
+format.
 
 ## 4. Value encoding
 
@@ -130,8 +150,8 @@ A proof is the Nervos compiled-merkle-proof byte string for a single slot key. V
 root from the leaf `(slot_key, leaf_digest)` and accepts iff the reconstruction equals `root`. No
 access to the tree is required.
 
-- **Membership** — `leaf_digest = sha256(0x01 ‖ encode(value))`. Verifying "this DID's field == X"
-  requires only the root and the proof.
+- **Membership** — `leaf_digest = sha256(0x01 ‖ slot_key ‖ encode(value))`. Verifying "this DID's
+  field == X" requires only the root and the proof.
 - **Non-membership** — `leaf_digest = 0x00…00` (32 zero bytes). This proves a slot is ABSENT and is
   REQUIRED (dig-chat must distinguish "no encryption key present" from a present key).
 
@@ -179,8 +199,41 @@ types** (never hand-rolled coin/hash types):
 fetch that populates these records (one launcher-parent lookup per store, resolving the DID's launcher
 id to its current singleton coin).
 
-## 8. Conformance
+### 7.1 Store-ownership predicate and portable proof
+
+`store_belongs_to_did(store, singleton) -> bool` is the domain-named form of the §7 predicate: it
+holds IFF BOTH links hold (discovery AND launch-from-DID lineage). Description-only or lineage-only
+MUST return `false`.
+
+`StoreOwnershipProof = { singleton: IdentitySingleton, store: StoreRecord }` is a portable
+attestation with no hidden state: it IS the two records. A third party verifies it by re-running the
+same predicate — `verify()` ⇔ `store_belongs_to_did(store, singleton)` — so verification requires no
+information beyond the proof's own fields.
+
+## 8. Composed field verification ("this datum belongs to this DID")
+
+The consumer-facing question — *does this profile field belong to DID D?* — is answered by composing
+the §7 pairing predicate with a §5 proof; BOTH MUST hold:
+
+- `verify_profile_field_for_did(singleton, store, root, slot, value, proof)` accepts IFF `store`
+  belongs to `singleton` (§7.1) AND `proof` proves `(slot, value)` against `root` (§5 membership).
+- `verify_profile_field_absent_for_did(singleton, store, root, slot, proof)` accepts IFF `store`
+  belongs to `singleton` AND `proof` proves `slot` is ABSENT against `root` (§5 non-membership).
+
+Both are **accept-only**: acceptance is the single success value `Ok(true)`, and every non-acceptance
+is an explicit error — `NotAuthoritativeProfile` (pairing failed) or `FieldProofRejected` (the merkle
+proof did not verify) — never a silent `Ok(false)`. `root` is the store's authoritative profile root,
+supplied by the caller (WU3 fetches it on-chain; WU1 is networkless).
+
+## 9. Conformance
 
 An implementation conforms iff, for the same inputs, it reproduces: (a) every §2.1 slot key, (b)
-every §4 value encoding, (c) every §5 leaf digest, merkle root, and proof (verify + reject), and (d)
-every §7 pairing decision. The crate's `tests/format.rs` is the executable conformance vector set.
+every §4 value encoding, (c) every §5 leaf digest, merkle root, and proof (verify + reject), (d)
+every §7 pairing and §7.1 ownership decision, and (e) every §8 composed-verification decision. The
+crate's `tests/format.rs` is the executable conformance vector set.
+
+This revision FREEZES the v1 format ahead of the first release: the `0x0008` slot, the ownership
+predicate/proof, and the composed-verify APIs are additive; the slot-key-bound leaf digest (§3) is a
+pre-release finalization of the leaf hashing (the crate is unreleased with no consumers, so it breaks
+no shipped `.dig`/profile bytes). From the first release onward the additive-only rule (§2.4) governs
+all further changes.
