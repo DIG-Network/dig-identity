@@ -1,0 +1,25 @@
+[package]
+name = "dig-identity"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Canonical DIG decentralized-identity profile format: a standard, additive sparse-merkle-tree of profile slots (keys, display fields) paired with a Chia identity singleton (DID) via a chip35 DataLayer store. Pure format + membership/non-membership proof + DID-store pairing predicate layer (chain-independent)."
+license = "GPL-2.0-only"
+repository = "https://github.com/DIG-Network/dig-identity"
+readme = "README.md"
+keywords = ["dig", "identity", "did", "sparse-merkle-tree", "profile"]
+categories = ["cryptography", "data-structures"]
+
+[dependencies]
+# Audited no_std/wasm-friendly sparse merkle tree with real non-membership proofs (Nervos). We reuse
+# its merkle construction verbatim — never hand-roll the tree — and plug in a sha256 Hasher (§dig).
+sparse-merkle-tree = "0.6"
+# sha256 for slot-key derivation, leaf-value hashing, and the SMT node Hasher.
+sha2 = "0.10"
+# Canonical Chia coin/hash types (Bytes32, Coin). Pinned to the ecosystem line (chip35, dig-block)
+# so a DID launcher id / coin lineage byte-agrees everywhere — never a hand-rolled 32-byte/coin type.
+chia-protocol = "0.26"
+# The canonical bech32m Address codec used to parse `did:chia:` DID strings into their launcher id.
+chia-sdk-utils = "0.30"
+# Structured errors on the public API.
+thiserror = "2"
