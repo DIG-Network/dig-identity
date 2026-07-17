@@ -205,10 +205,27 @@ id to its current singleton coin).
 holds IFF BOTH links hold (discovery AND launch-from-DID lineage). Description-only or lineage-only
 MUST return `false`.
 
-`StoreOwnershipProof = { singleton: IdentitySingleton, store: StoreRecord }` is a portable
-attestation with no hidden state: it IS the two records. A third party verifies it by re-running the
-same predicate — `verify()` ⇔ `store_belongs_to_did(store, singleton)` — so verification requires no
-information beyond the proof's own fields.
+`StoreOwnershipProof = { singleton: IdentitySingleton, store: StoreRecord }` is a convenience bundle
+of the two records: `verify()` ⇔ `store_belongs_to_did(store, singleton)`, re-running the same
+predicate.
+
+**WU1 trust boundary (NORMATIVE — the predicate is relative, not trustless).** `singleton.did` and
+`singleton.coin_id` are independent, caller-supplied fields with NO internal binding: WU1 does NOT
+authenticate that `coin_id` is `did.launcher_id`'s real singleton coin. The pairing/ownership decision
+is therefore SOUND ONLY RELATIVE TO a `coin_id` — and a `root` (§8) — the verifier has INDEPENDENTLY
+resolved on-chain. A producer who supplies their OWN launcher coin as `coin_id`, with a store they
+launched from it whose `description` names a victim DID, obtains `store_belongs_to_did == true` and
+`StoreOwnershipProof::verify() == true` — a spoof of the victim DID. Consequently:
+
+- `StoreOwnershipProof` is NOT a self-authenticating, trustless attestation, and MUST NOT be trusted
+  from an untrusted producer. A `true` means only "these records satisfy the predicate", not "this
+  store is chain-authenticated as the DID's profile".
+- WU3 MUST resolve `singleton.coin_id` as `did.launcher_id`'s authentic CURRENT singleton coin, and
+  the §8 `root` as THIS store's authentic current on-chain `root_hash`, before any consumer relies on
+  the decision. Producing a portable proof whose `coin_id` is chain-bound to the DID is WU3's job.
+
+(The conformance vector `store_ownership_proof_is_relative_to_a_trusted_coin_id_not_trustless` pins
+this limitation.)
 
 ## 8. Composed field verification ("this datum belongs to this DID")
 
@@ -223,7 +240,10 @@ the §7 pairing predicate with a §5 proof; BOTH MUST hold:
 Both are **accept-only**: acceptance is the single success value `Ok(true)`, and every non-acceptance
 is an explicit error — `NotAuthoritativeProfile` (pairing failed) or `FieldProofRejected` (the merkle
 proof did not verify) — never a silent `Ok(false)`. `root` is the store's authoritative profile root,
-supplied by the caller (WU3 fetches it on-chain; WU1 is networkless).
+supplied by the caller (WU3 fetches it on-chain; WU1 is networkless). Per the §7.1 trust boundary, a
+membership proof is only meaningful against the store's authentic current on-chain `root_hash`: a
+valid proof against an unrelated `root` gives a false accept, so WU3 MUST resolve `root` (and
+`singleton.coin_id`) before a consumer relies on the result.
 
 ## 9. Conformance
 

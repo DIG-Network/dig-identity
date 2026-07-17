@@ -462,6 +462,40 @@ fn store_belongs_to_did_and_ownership_proof_require_both_links() {
     assert!(!StoreOwnershipProof::new(singleton(), lineage_only).verify());
 }
 
+#[test]
+fn store_ownership_proof_is_relative_to_a_trusted_coin_id_not_trustless() {
+    // Pins the DOCUMENTED trust boundary of `StoreOwnershipProof` (NOT a bug): `verify()` re-runs the
+    // pairing predicate, but `singleton.coin_id` is a caller-supplied field the predicate does NOT
+    // authenticate. So an attacker can forge a proof that passes the predicate yet does NOT prove
+    // on-chain ownership — which is exactly why WU3 MUST resolve `coin_id` on-chain (as the DID's
+    // authentic current singleton coin) before any consumer trusts this bundle.
+    //
+    use dig_identity::StoreOwnershipProof;
+    // The attack: the attacker launches store S from their OWN coin `C_att`, describes S as the
+    // VICTIM's DID, and supplies `coin_id = C_att` (their own coin, never resolved against the victim
+    // DID's real singleton). Discovery ✓ (description names the victim DID) and authority ✓
+    // (`launcher_coin.parent == C_att == coin_id`) → the predicate accepts.
+    let victim_did = Did::parse(&did_string([0x22; 32])).unwrap();
+    let attacker_coin_id = Bytes32::from([0xEE; 32]); // C_att — the attacker's own coin, NOT resolved
+
+    let forged = StoreOwnershipProof::new(
+        IdentitySingleton {
+            did: victim_did,
+            coin_id: attacker_coin_id,
+        },
+        StoreRecord {
+            description: did_string([0x22; 32]), // claims to be the victim DID's profile
+            launcher_coin: launcher_coin([0xEE; 32]), // launched from C_att, so parent == coin_id
+        },
+    );
+
+    // The predicate accepts — this is the trap. It means only "these records satisfy the predicate",
+    // NOT "S is chain-authenticated as the victim DID's profile". Soundness requires `coin_id` to be
+    // externally resolved on-chain (WU3); the predicate alone is NOT trustless.
+    assert!(forged.verify());
+    assert!(forged.outcome().is_authoritative());
+}
+
 // ---------- composed verify_profile_field_for_did ----------
 
 /// An authoritative store for the test `singleton()` plus a profile committed to its root.

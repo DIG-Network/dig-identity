@@ -91,27 +91,45 @@ pub fn is_authoritative_profile(store: &StoreRecord, singleton: &IdentitySinglet
 /// predicate hold: the store's `description` names the DID (discovery) AND the store's launcher coin
 /// was launched from the DID singleton (launch-from-DID lineage). Description-only or lineage-only
 /// returns `false`.
+///
+/// **Trust boundary:** this is sound ONLY RELATIVE TO a `singleton.coin_id` the caller has resolved
+/// on-chain (WU3) as `did.launcher_id`'s authentic current singleton coin. `coin_id` is caller-
+/// supplied and unauthenticated here — an attacker may pass their OWN launcher coin as `coin_id` and,
+/// with a store they launched from it whose description names the victim DID, obtain a `true`. Never
+/// pass a producer-supplied `coin_id`.
 pub fn store_belongs_to_did(store: &StoreRecord, singleton: &IdentitySingleton) -> bool {
     is_authoritative_profile(store, singleton)
 }
 
-/// A portable, self-verifying attestation that a chip35 store belongs to a DID.
+/// A convenience bundle of the `(singleton, store)` records the pairing predicate runs over.
 ///
-/// It carries both caller-supplied records (built from canonical `chia-protocol` types), so a third
-/// party can re-run the pairing predicate independently — [`StoreOwnershipProof::verify`] holds IFF
-/// BOTH `store.description == did:chia:<launcher_id>` AND the launch-from-DID lineage
-/// `store.launcher_coin.parent_coin_info == singleton.coin_id`. There is no hidden state: the proof
-/// IS the two records, and verification is the same predicate every consumer runs.
+/// **NOT a self-authenticating, trustless proof.** [`StoreOwnershipProof::verify`] re-runs the §7
+/// predicate — it confirms the discovery link (`store.description == did:chia:<launcher_id>`) AND the
+/// authority link (`store.launcher_coin.parent_coin_info == singleton.coin_id`) — but that decision is
+/// SOUND ONLY RELATIVE TO a `singleton.coin_id` the verifier has INDEPENDENTLY resolved on-chain (WU3)
+/// as `did.launcher_id`'s authentic CURRENT singleton coin.
+///
+/// Both `singleton.did` and `singleton.coin_id` are independent, caller-supplied fields with NO
+/// internal binding: nothing here checks that `coin_id` is the DID's real singleton coin. A producer
+/// may therefore supply ANY `coin_id` — e.g. their own launcher coin — so a store they launched
+/// themselves passes `verify()` against a victim's DID. Consuming this bundle from an UNTRUSTED
+/// producer is a spoofing trap: `verify() == true` means only "these two records satisfy the
+/// predicate", not "this store is chain-authenticated as the DID's profile".
+///
+/// The trustworthy portable proof — one whose `coin_id` is chain-bound to the DID — is WU3's job. Use
+/// this type only when YOU have resolved `singleton.coin_id` on-chain yourself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreOwnershipProof {
-    /// The identity singleton the store claims to belong to.
+    /// The identity singleton the store claims to belong to. `coin_id` MUST be the verifier's own
+    /// on-chain-resolved singleton coin for `did` (WU3) — it is NOT authenticated by [`Self::verify`].
     pub singleton: IdentitySingleton,
     /// The candidate profile store record.
     pub store: StoreRecord,
 }
 
 impl StoreOwnershipProof {
-    /// Binds a `(singleton, store)` pair into a portable ownership attestation.
+    /// Bundles a `(singleton, store)` pair. Does NOT authenticate `singleton.coin_id` — see the type
+    /// doc: the caller MUST have resolved `coin_id` on-chain (WU3) before trusting [`Self::verify`].
     pub fn new(singleton: IdentitySingleton, store: StoreRecord) -> Self {
         StoreOwnershipProof { singleton, store }
     }
@@ -121,7 +139,11 @@ impl StoreOwnershipProof {
         evaluate_pairing(&self.store, &self.singleton)
     }
 
-    /// Returns `true` iff the attested store genuinely belongs to the attested DID (BOTH links).
+    /// Re-runs the §7 pairing predicate over the bundled records (BOTH links).
+    ///
+    /// Returns `true` iff discovery AND authority hold — but ONLY sound when `singleton.coin_id` was
+    /// verifier-resolved on-chain as the DID's authentic current singleton coin (see the type doc). A
+    /// `true` from an untrusted producer does NOT prove chain ownership.
     pub fn verify(&self) -> bool {
         store_belongs_to_did(&self.store, &self.singleton)
     }
