@@ -1,6 +1,6 @@
 [package]
 name = "dig-identity"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Canonical DIG decentralized-identity profile format: a standard, additive sparse-merkle-tree of profile slots (keys, display fields) paired with a Chia identity singleton (DID) via a chip35 DataLayer store. Pure format + membership/non-membership proof + DID-store pairing predicate layer (chain-independent)."
