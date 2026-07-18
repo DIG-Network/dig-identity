@@ -132,14 +132,24 @@ impl IdentityProfile {
         store_belongs_to_did(&self.store, &self.singleton)
     }
 
-    /// Builds a membership proof that `slot` currently holds its value, verifiable against
-    /// [`Self::root`] by [`crate::proof::verify_membership`]. Errors if `slot` is absent.
+    /// Builds a membership proof that `slot` currently holds its value in the CURRENT metadata,
+    /// verifiable by [`crate::proof::verify_membership`]. Errors if `slot` is absent.
+    ///
+    /// The proof is taken over the current metadata, which reflects any PENDING [`Self::set`] edits.
+    /// It therefore verifies against the metadata's current (pending) root — which equals
+    /// [`Self::root`] only when there are no uncommitted edits (i.e. right after [`Self::resolve`] or
+    /// [`Self::commit_root`]); after an uncommitted `set`, verify it against the pending root that
+    /// `set` returned, NOT the committed [`Self::root`].
     pub fn prove_field(&self, slot: SlotId) -> Result<ProfileProof> {
         self.metadata.build_tree()?.prove_membership(slot)
     }
 
-    /// Builds a non-membership proof that `slot` is currently absent, verifiable against
-    /// [`Self::root`] by [`crate::proof::verify_non_membership`]. Errors if `slot` is present.
+    /// Builds a non-membership proof that `slot` is currently absent from the CURRENT metadata,
+    /// verifiable by [`crate::proof::verify_non_membership`]. Errors if `slot` is present.
+    ///
+    /// Like [`Self::prove_field`], the proof is over the current metadata (reflecting any PENDING
+    /// [`Self::set`] edits) and so verifies against the pending metadata root, which equals
+    /// [`Self::root`] only when there are no uncommitted edits.
     pub fn prove_field_absent(&self, slot: SlotId) -> Result<ProfileProof> {
         self.metadata.build_tree()?.prove_non_membership(slot)
     }
