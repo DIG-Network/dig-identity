@@ -18,6 +18,7 @@ byte-level contract.
 - `DID→keys` resolution (signing / encryption / peer_id / key_epoch) — the dig-chat / dig-node seam.
 - The DID↔store bidirectional-pairing predicate (description discovery + launch-from-DID authority),
   which REJECTS description-only matches.
+- The `IdentityProfile` primitive (v0.2.0) — the managed DID + store + profile-SMT object.
 
 ## Example
 
@@ -35,6 +36,79 @@ let claim = Value::Utf8("Ada".into());
 assert!(proof::verify_membership(&root, standard::DISPLAY_NAME, &claim, &membership)?);
 # Ok::<(), dig_identity::Error>(())
 ```
+
+## The `IdentityProfile` primitive
+
+`Profile` (above) is just the metadata slot-map. `IdentityProfile` is the **managed object** that
+composes the three things a DIG identity is at rest into one lifecycle:
+
+- the **DID identity singleton** (its anchor — a `did:chia:` DID plus the singleton coin id you
+  resolved on-chain),
+- the **paired chip35 DataLayer store** launched from that DID, and
+- the **profile SMT** (`Profile`) it commits to, with the current committed root.
+
+This is the object dig-chat / dig-email / dig-video-chat and dig-app profiles build on, instead of
+re-assembling the triple by hand. It wraps `Profile` — it does not replace it. The pairing/proof
+contract it enforces is normative in [`SPEC.md`](./SPEC.md) §8.1.
+
+### Resolve a paired profile
+
+`IdentityProfile::resolve` constructs the primitive **only** when the store genuinely belongs to the
+DID — the store must name the DID in its description AND have been launched from the DID singleton.
+A description-only or lineage-only (spoofed) store is rejected, so an `IdentityProfile` value can
+only exist for a paired store.
+
+```rust
+use dig_identity::{IdentityProfile, Profile, Value, slot::standard};
+
+// `singleton` (DID + on-chain-resolved coin id) and `store` (the paired chip35 store record) come
+// from your chain resolver; `metadata` is the profile you read back from the store.
+let identity = IdentityProfile::resolve(singleton, store, metadata)?;
+
+assert!(identity.store_belongs_to_did());
+let name = identity.display_name();          // read accessors delegate to the inner Profile
+let keys = identity.keys();                  // signing / encryption / peer_id / key_epoch
+let pay_to = identity.xch_address();         // the $DIG-payments seam, if published
+# Ok::<(), dig_identity::Error>(())
+```
+
+> Soundness is **relative to** a `coin_id` you resolved on-chain yourself. `resolve` verifies the
+> pairing predicate over the records you give it; it does not authenticate the coin id for you. Never
+> pass a coin id supplied by an untrusted producer.
+
+### Edit and commit the root
+
+`set` applies an edit and returns the resulting **pending** root; the committed root (which tracks
+the on-chain store root) is unchanged until `commit_root` promotes it. Building and broadcasting the
+on-chain root-update spend is the chain layer's job (WU2/WU3) — this crate only computes the root.
+
+```rust
+let mut identity = identity;
+let pending = identity.set(standard::BIO, Value::Utf8("builds on Chia".into()))?;
+assert_ne!(pending, identity.root());        // committed root not moved yet
+let committed = identity.commit_root()?;     // promote the pending root
+assert_eq!(committed, pending);
+# Ok::<(), dig_identity::Error>(())
+```
+
+### Prove a field
+
+`prove_field` / `prove_field_absent` mint proofs that verify against `root()` alone (via the
+crate's standalone `proof::verify_membership` / `verify_non_membership`), so a consumer can check
+"this DID publishes X" or "this DID publishes no encryption key" without pulling the whole profile.
+
+```rust
+let name_proof = identity.prove_field(standard::DISPLAY_NAME)?;
+let no_key = identity.prove_field_absent(standard::ENCRYPTION_PUBLIC_KEY)?;
+# Ok::<(), dig_identity::Error>(())
+```
+
+### Minting (not yet implemented)
+
+`IdentityProfile::mint_from_did` — which launches a fresh DID and a chip35 store from it — is
+**chain-gated and not yet implemented**: it returns `Error::MintNotYetImplemented`. Minting builds
+on-chain spends and depends on the dig-store crate and the chain layer landing first; the signature
+exists now so consumers can code against the primitive's final shape.
 
 ## License
 

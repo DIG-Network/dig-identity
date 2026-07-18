@@ -49,6 +49,7 @@
 pub mod did;
 pub mod error;
 pub mod hash;
+pub mod identity_profile;
 pub mod keys;
 pub mod pairing;
 pub mod profile;
@@ -61,6 +62,7 @@ pub mod xch;
 
 pub use did::{parse_did_from_description, Did};
 pub use error::{Error, Result};
+pub use identity_profile::IdentityProfile;
 pub use keys::DidKeys;
 pub use pairing::{
     evaluate_pairing, is_authoritative_profile, store_belongs_to_did, IdentitySingleton,
