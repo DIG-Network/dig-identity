@@ -49,6 +49,15 @@ pub enum Error {
     /// the claimed value (or absence) against the supplied profile root.
     #[error("profile-field merkle proof did not verify against the profile root")]
     FieldProofRejected,
+
+    /// `IdentityProfile::mint_from_did` is not yet implemented. Minting is GATED on the dig-store
+    /// crate (#703/#754) and the WU3 chain layer (#778); dig-identity MUST NOT depend on dig-store
+    /// (the dependency graph stays acyclic), so the launch driver lands as a WU2 follow-on — not
+    /// here. The signature exists now so consumers code against the primitive's final shape.
+    #[error(
+        "IdentityProfile::mint_from_did is not yet implemented          (gated on the dig-store crate and the WU3 chain layer)"
+    )]
+    MintNotYetImplemented,
 }
 
 /// A `Result` specialized to this crate's [`Error`].

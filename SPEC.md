@@ -1,6 +1,6 @@
 # dig-identity — normative specification
 
-Version: 0.1.0 (WU1, format layer). Status: NORMATIVE.
+Version: 0.2.0 (WU1 format layer + the `IdentityProfile` primitive). Status: NORMATIVE.
 
 This document is the authoritative contract for the DIG decentralized-identity **profile format**. An
 independent implementation (Rust, TypeScript, or wasm) built to this document MUST produce
@@ -244,6 +244,44 @@ supplied by the caller (WU3 fetches it on-chain; WU1 is networkless). Per the §
 membership proof is only meaningful against the store's authentic current on-chain `root_hash`: a
 valid proof against an unrelated `root` gives a false accept, so WU3 MUST resolve `root` (and
 `singleton.coin_id`) before a consumer relies on the result.
+
+## 8.1 The `IdentityProfile` primitive (the managed DID + store + SMT triple)
+
+`IdentityProfile` is the managed object that composes the three pieces a DIG identity is at rest —
+the identity singleton (§7 `IdentitySingleton` = DID + caller-resolved singleton coin id), the paired
+chip35 DataLayer store (§7 `StoreRecord`), and the profile SMT (§6 `Profile`) with its current
+committed root — into one lifecycle. It **wraps** `Profile` (which is unchanged and still the metadata
+slot-map consumers read directly); it does NOT replace it. It adds only lifecycle wiring over the
+already-normative §5/§6/§7/§8 primitives and introduces no new trust.
+
+Networkless surface (WU1 — implemented now):
+
+- `IdentityProfile::resolve(singleton, store, metadata) -> Result<Self>` — constructs the primitive
+  ONLY when the §7.1 pairing predicate holds over the supplied records (`store_belongs_to_did`);
+  otherwise `Err(NotAuthoritativeProfile)`. A description-only or lineage-only store is REJECTED, so an
+  `IdentityProfile` value cannot exist for an unpaired/spoofed store. The committed root is computed
+  from `metadata` (§5/§6). This inherits the §7.1 **trust boundary VERBATIM**: soundness is relative to
+  a `singleton.coin_id` the caller resolved on-chain (WU3); `resolve` does NOT authenticate `coin_id`
+  and MUST NOT be construed as chain authentication.
+- `set(slot, value) -> Result<root>` — edits the in-memory metadata and returns the resulting
+  **pending** root; the committed root is unchanged until `commit_root`.
+- `commit_root() -> Result<root>` — recomputes the metadata root and promotes it to the committed
+  root (the root a caller then commits on-chain). Building/broadcasting the chip35 update-root spend
+  is WU2/WU3; WU1 computes only the root.
+- `store_belongs_to_did() -> bool`, `prove_field(slot)`, `prove_field_absent(slot)` — thin over §7.1
+  and §5; proofs verify against `root()` by the standalone §5 verifiers.
+- Read accessors — `did()`, `singleton()`, `store()`, `metadata()`, `root()`, `keys()` (§6),
+  `xch_address()`, `display_name()` — delegate to the inner records.
+
+Chain-gated surface (STUBBED):
+
+- `mint_from_did(did_coin, owner_puzzle_hash, seed_metadata) -> Result<Self>` — launches a DID and a
+  chip35 store launched FROM it (launch-from-DID lineage, §7). It is **NOT YET IMPLEMENTED** and MUST
+  return the typed `MintNotYetImplemented` error. Minting is GATED on the dig-store crate and the WU3
+  chain layer; dig-identity MUST NOT depend on dig-store (the dependency graph stays acyclic), so the
+  launch driver ships as a WU2 follow-on. The signature exists now so consumers code against the final
+  shape; when the gate lifts it will additionally yield the launch spend bundle and take the owner
+  delegation.
 
 ## 9. Conformance
 
