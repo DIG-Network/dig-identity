@@ -289,6 +289,33 @@ A conforming implementation MUST reproduce: (a) the §6a.1 derivation KAT — a 
 domain-separation property; (e) the §6a.3 subgroup check REJECTING the identity/infinity point and a
 non-subgroup point.
 
+### 6a.7 Node/relay identity — the SAME key model, a DISTINCT per-role instance
+
+A DIG node and a DIG relay each carry their OWN node-level BLS G1 identity key, derived through
+this EXACT §6a model — the FIXED path `m/12381'/8444'/9'/0'` (slot `0x0010`), from that process's
+OWN keystore master seed (`master_secret_key_from_seed` → `derive_identity_sk`). This key is used
+at the transport/protocol level:
+
+1. **Binding `peer_id` ↔ BLS public key** at the mTLS handshake (dig-nat) — the identity key proves
+   who is on the other end of a peer connection.
+2. **Sealing directed gossip messages** to a recipient peer (dig-gossip) — `g1_dh` (§6a.2) is the DH
+   primitive of the seal, exactly as for any other DIG identity.
+3. **Signing peer records** in PEX/DHT so a pre-dial verification can check the record's signer
+   (§6a.2 `sign_message`/`verify_signature`).
+
+This node/relay identity key is **NOT the user/funds identity** (the DID-anchored profile key of
+§1–§7): it is a separate keypair, one per process, derived from that process's own keystore — never
+the user's wallet seed. The node/relay engine never holds a user's funds key (dig-ecosystem
+`CLAUDE.md` §908, the node↔user identity boundary): deriving its OWN §6a.1 identity at its OWN
+process-local seed keeps that boundary intact while still reusing the identical, vetted derivation
+path, sign, and seal primitives. `peer_id` (the node/relay's transport-level connection identifier)
+remains distinct from this BLS identity key — the BLS key is the recipient-seal target; `peer_id`
+is the routing/session handle.
+
+No new derivation, slot, or primitive is introduced for this use — §6a.5's existing public API
+(`IDENTITY_DERIVATION_PATH`, `derive_identity_sk`, `public_key_bytes`, `g1_dh`, `sign_message`,
+`verify_signature`) is sufficient and is the one a node/relay implementation calls.
+
 ## 7. DID↔store pairing (bidirectional; BOTH links MANDATORY)
 
 A store is the authoritative profile of an identity anchor only when BOTH links hold:
