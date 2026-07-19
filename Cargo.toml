@@ -1,6 +1,6 @@
 [package]
 name = "dig-identity"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Canonical DIG decentralized-identity profile format: a standard, additive sparse-merkle-tree of profile slots (keys, display fields) paired with a Chia identity singleton (DID) via a chip35 DataLayer store. Pure format + membership/non-membership proof + DID-store pairing predicate layer (chain-independent)."
@@ -23,3 +23,22 @@ chia-protocol = "0.26"
 chia-sdk-utils = "0.30"
 # Structured errors on the public API.
 thiserror = "2"
+
+# --- BLS identity key model (feature `bls`, §6a) ---------------------------------------------------
+# The canonical Chia BLS12-381 primitives (minimal-pubkey-size: G1 pubkeys, G2 signatures): EIP-2333
+# hardened derivation, AugSchemeMPL sign/verify. Pinned to the ecosystem line (dig-block, dig-keystore)
+# so the identity key byte-agrees with wallet-derived keys — never a hand-rolled BLS.
+chia-bls = { version = "0.26", optional = true }
+# The low-level BLS12-381 backend used for the ONE operation chia-bls does not expose: raw G1
+# scalar-multiplication (the ECDH `dh(sk, pk) = sk·pk`) plus the G1 subgroup / non-identity check.
+blst = { version = "0.3", optional = true }
+
+[features]
+# The BLS identity key model (§6a) is on by default so the KATs run in CI, but can be disabled
+# (`default-features = false`) to keep the pure format layer building for wasm / no-network targets.
+default = ["bls"]
+bls = ["dep:chia-bls", "dep:blst"]
+
+[dev-dependencies]
+# sha2 for deriving reproducible cross-impl KAT seeds from labels (tests/bls_key_model.rs).
+sha2 = "0.10"

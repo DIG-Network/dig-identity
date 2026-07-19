@@ -51,7 +51,7 @@ fn paired_store() -> StoreRecord {
 }
 
 fn seeded_profile() -> Profile {
-    let mut p = Profile::with_schema_v1();
+    let mut p = Profile::with_schema_v2();
     p.set(standard::DISPLAY_NAME, Value::Utf8("Ada".into()));
     p
 }
@@ -140,11 +140,9 @@ fn prove_field_produces_a_membership_proof_verifying_against_the_root() {
 #[test]
 fn prove_field_absent_produces_a_non_membership_proof_verifying_against_the_root() {
     let profile = IdentityProfile::resolve(singleton(), paired_store(), seeded_profile()).unwrap();
-    let proof = profile
-        .prove_field_absent(standard::ENCRYPTION_PUBLIC_KEY)
-        .unwrap();
+    let proof = profile.prove_field_absent(standard::PEER_ID).unwrap();
     assert!(
-        verify_non_membership(&profile.root(), standard::ENCRYPTION_PUBLIC_KEY, &proof).unwrap(),
+        verify_non_membership(&profile.root(), standard::PEER_ID, &proof).unwrap(),
         "the non-membership proof must verify against root() alone"
     );
 }
@@ -169,17 +167,14 @@ fn accessors_delegate_to_the_inner_profile() {
         ),
     );
     inner.set(
-        standard::ENCRYPTION_PUBLIC_KEY,
-        Value::Bytes(derived_bytes32("x25519-ik").to_vec()),
+        standard::PEER_ID,
+        Value::Bytes(derived_bytes32("peer-id").to_vec()),
     );
     let profile = IdentityProfile::resolve(singleton(), paired_store(), inner).unwrap();
 
     assert_eq!(profile.display_name(), Some("Ada"));
     assert!(profile.xch_address().is_some());
-    assert_eq!(
-        profile.keys().encryption_public_key,
-        Some(derived_bytes32("x25519-ik"))
-    );
+    assert_eq!(profile.keys().peer_id, Some(derived_bytes32("peer-id")));
     assert_eq!(profile.singleton(), &singleton());
     assert_eq!(profile.store(), &paired_store());
     assert_eq!(profile.metadata().display_name(), Some("Ada"));

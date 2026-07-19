@@ -11,6 +11,14 @@
 //! added ONLY by allocating a new slot id. An existing slot id is NEVER renumbered, repurposed, or
 //! re-encoded, and a reader MUST ignore slot ids it does not recognize rather than reject the
 //! profile — so an old reader keeps working against a newer writer's tree.
+//!
+//! ## Schema v2 reset (one-time pre-release exception)
+//!
+//! This revision re-encoded slot `0x0010` (v1 Ed25519 → v2 48-byte BLS12-381 G1) and retired slot
+//! `0x0011` (v1 X25519). This is the ONE sanctioned break of the additive-only rule, permitted ONLY
+//! because the crate is pre-1.0 and pre-release with ZERO on-chain profiles to protect (SPEC §2.4):
+//! there are no shipped bytes to keep readable. [`standard::SCHEMA_VERSION_V2`] records the reset.
+//! From this revision onward the additive-only rule is absolute again.
 
 use crate::hash::{sha256, Digest32};
 
@@ -58,11 +66,12 @@ impl SlotId {
     }
 }
 
-/// The v1 standard slot ids. Fixed forever; new fields are appended, never re-numbered (§5.1).
+/// The v2 standard slot ids. Additive-only from this revision; new fields are appended, never
+/// re-numbered (§2.4). The v2 reset re-encoded `0x0010` and retired `0x0011` (see the module doc).
 pub mod standard {
     use super::SlotId;
 
-    /// `u16` = 1. The profile schema version the tree was written against.
+    /// `u16` = 2. The profile schema version the tree was written against.
     pub const SCHEMA_VERSION: SlotId = SlotId(0x0000);
     /// UTF-8 display name.
     pub const DISPLAY_NAME: SlotId = SlotId(0x0001);
@@ -83,10 +92,18 @@ pub mod standard {
     /// ([`crate::xch::parse_xch_address`]).
     pub const XCH_ADDRESS: SlotId = SlotId(0x0008);
 
-    /// 32-byte Ed25519 signing public key. Feeds DID→keys resolution (dig-chat, dig-node).
-    pub const SIGNING_PUBLIC_KEY: SlotId = SlotId(0x0010);
-    /// 32-byte X25519 identity public key (encryption). Feeds DID→keys resolution.
-    pub const ENCRYPTION_PUBLIC_KEY: SlotId = SlotId(0x0011);
+    /// 48-byte compressed BLS12-381 **G1** identity public key — the SINGLE identity key (§6a). It
+    /// serves BOTH the sender signature (BLS G2, AugSchemeMPL) and the seal DH (G1 ECDH). Feeds
+    /// DID→keys resolution (dig-message, dig-chat, dig-node).
+    ///
+    /// v2 re-encoding: this slot held a 32-byte Ed25519 key in v1; the v2 schema reset repurposed it
+    /// to the 48-byte BLS G1 key (the ONLY sanctioned break of the additive-only rule — pre-release,
+    /// zero on-chain profiles). See the module doc.
+    pub const BLS_G1_PUBLIC_KEY: SlotId = SlotId(0x0010);
+
+    // Slot `0x0011` (v1 X25519 encryption key) is RETIRED in v2 — the one BLS G1 key at `0x0010`
+    // does both sign and seal, so there is no separate encryption key. The id is not reused.
+
     /// 32-byte peer id = `SHA-256(TLS SPKI DER)`. Feeds DID→keys resolution.
     pub const PEER_ID: SlotId = SlotId(0x0012);
     /// `u32` key epoch — bumped on each key rotation.
@@ -95,6 +112,6 @@ pub mod standard {
     /// `u64` Unix-seconds last-updated timestamp.
     pub const UPDATED_AT: SlotId = SlotId(0x0018);
 
-    /// The schema version this crate writes.
-    pub const SCHEMA_VERSION_V1: u16 = 1;
+    /// The schema version this crate writes (v2 — the BLS-G1-only key model).
+    pub const SCHEMA_VERSION_V2: u16 = 2;
 }

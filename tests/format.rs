@@ -116,11 +116,11 @@ fn reserved_ranges_classify_correctly() {
 // ---------- membership / non-membership proof round-trips ----------
 
 fn sample_tree() -> (ProfileTree, [u8; 32]) {
-    let mut profile = Profile::with_schema_v1();
+    let mut profile = Profile::with_schema_v2();
     profile
         .set(standard::DISPLAY_NAME, Value::Utf8("Ada".into()))
         .set(standard::BIO, Value::Utf8("mathematician".into()))
-        .set(standard::SIGNING_PUBLIC_KEY, Value::Bytes(vec![7u8; 32]));
+        .set(standard::BLS_G1_PUBLIC_KEY, Value::Bytes(vec![7u8; 48]));
     let tree = profile.build_tree().unwrap();
     let root = tree.root();
     (tree, root)
@@ -184,10 +184,8 @@ fn tree_exposes_encoded_bytes_and_profile_iterates_in_order() {
 #[test]
 fn non_membership_proof_verifies_absent_slot() {
     let (tree, root) = sample_tree();
-    let proof = tree
-        .prove_non_membership(standard::ENCRYPTION_PUBLIC_KEY)
-        .unwrap();
-    assert!(verify_non_membership(&root, standard::ENCRYPTION_PUBLIC_KEY, &proof).unwrap());
+    let proof = tree.prove_non_membership(standard::PEER_ID).unwrap();
+    assert!(verify_non_membership(&root, standard::PEER_ID, &proof).unwrap());
 }
 
 #[test]
@@ -201,9 +199,7 @@ fn non_membership_proof_rejects_present_slot() {
 #[test]
 fn prove_membership_errors_on_absent_slot() {
     let (tree, _) = sample_tree();
-    assert!(tree
-        .prove_membership(standard::ENCRYPTION_PUBLIC_KEY)
-        .is_err());
+    assert!(tree.prove_membership(standard::PEER_ID).is_err());
 }
 
 #[test]
@@ -234,28 +230,40 @@ fn empty_tree_has_zero_root() {
 
 #[test]
 fn profile_accessors_decode_standard_slots() {
-    let mut profile = Profile::with_schema_v1();
+    let mut profile = Profile::with_schema_v2();
     profile
         .set(standard::DISPLAY_NAME, Value::Utf8("Ada".into()))
         .set(standard::BIO, Value::Utf8("bio".into()))
-        .set(standard::ENCRYPTION_PUBLIC_KEY, Value::Bytes(vec![9u8; 32]))
+        .set(standard::BLS_G1_PUBLIC_KEY, Value::Bytes(vec![9u8; 48]))
         .set(standard::KEY_EPOCH, Value::U32(3));
 
-    assert_eq!(profile.schema_version(), Some(1));
+    assert_eq!(profile.schema_version(), Some(2));
     assert_eq!(profile.display_name(), Some("Ada"));
     assert_eq!(profile.bio(), Some("bio"));
 
     let keys = dig_identity::resolve_did_keys(&profile);
-    assert_eq!(keys.encryption_public_key, Some([9u8; 32]));
-    assert_eq!(keys.signing_public_key, None);
+    assert_eq!(keys.bls_g1_public_key, Some([9u8; 48]));
+    assert_eq!(keys.peer_id, None);
     assert_eq!(keys.key_epoch, Some(3));
 }
 
 #[test]
-fn newer_reader_reads_an_older_schema_v1_profile() {
-    // A v1 profile with an UNKNOWN future custom slot must still read cleanly: known slots decode,
-    // the unknown slot is simply ignored by the typed accessors (additive-only, §5.1).
-    let mut profile = Profile::with_schema_v1();
+fn resolve_keys_ignores_a_wrong_length_identity_key() {
+    // Slot 0x0010 must hold exactly 48 bytes to be read as a BLS G1 key; a 32-byte value (e.g. a
+    // stale v1 Ed25519 key) is treated as absent, so a consumer never receives a malformed key.
+    let mut profile = Profile::with_schema_v2();
+    profile.set(standard::BLS_G1_PUBLIC_KEY, Value::Bytes(vec![1u8; 32]));
+    assert_eq!(
+        dig_identity::resolve_did_keys(&profile).bls_g1_public_key,
+        None
+    );
+}
+
+#[test]
+fn reader_ignores_an_unknown_future_slot() {
+    // A profile with an UNKNOWN future custom slot must still read cleanly: known slots decode, the
+    // unknown slot is simply ignored by the typed accessors (additive-only, §2.4).
+    let mut profile = Profile::with_schema_v2();
     profile
         .set(standard::DISPLAY_NAME, Value::Utf8("Grace".into()))
         .set(SlotId(0x1234), Value::Bytes(vec![1, 2, 3])); // custom/unknown slot
@@ -263,7 +271,7 @@ fn newer_reader_reads_an_older_schema_v1_profile() {
     let tree = profile.build_tree().unwrap();
     let root = tree.root();
 
-    assert_eq!(profile.schema_version(), Some(1));
+    assert_eq!(profile.schema_version(), Some(2));
     assert_eq!(profile.display_name(), Some("Grace"));
 
     // The unknown slot still participates in the tree and is itself provable.
@@ -396,7 +404,7 @@ fn xch_address_string(payload: [u8; 32]) -> String {
 #[test]
 fn xch_address_accessor_accepts_a_canonical_mainnet_address() {
     let addr = xch_address_string([0x55; 32]);
-    let mut profile = Profile::with_schema_v1();
+    let mut profile = Profile::with_schema_v2();
     profile.set(standard::XCH_ADDRESS, Value::Utf8(addr.clone()));
     assert_eq!(profile.xch_address(), Some(addr.as_str()));
     // Provable against the root like any other field.
@@ -504,7 +512,7 @@ fn authoritative_profile() -> (StoreRecord, Profile) {
         description: did_string([0x22; 32]),
         launcher_coin: launcher_coin(SINGLETON_COIN_ID),
     };
-    let mut profile = Profile::with_schema_v1();
+    let mut profile = Profile::with_schema_v2();
     profile.set(standard::DISPLAY_NAME, Value::Utf8("Ada".into()));
     (store, profile)
 }
@@ -583,15 +591,13 @@ fn composed_absent_verify_accepts_and_rejects() {
     let root = tree.root();
 
     // Accepts a genuine absence.
-    let absent = tree
-        .prove_non_membership(standard::ENCRYPTION_PUBLIC_KEY)
-        .unwrap();
+    let absent = tree.prove_non_membership(standard::PEER_ID).unwrap();
     assert_eq!(
         verify_profile_field_absent_for_did(
             &singleton(),
             &store,
             &root,
-            standard::ENCRYPTION_PUBLIC_KEY,
+            standard::PEER_ID,
             &absent,
         ),
         Ok(true)
@@ -607,7 +613,7 @@ fn composed_absent_verify_accepts_and_rejects() {
             &singleton(),
             &spoof,
             &root,
-            standard::ENCRYPTION_PUBLIC_KEY,
+            standard::PEER_ID,
             &absent,
         ),
         Err(Error::NotAuthoritativeProfile)
