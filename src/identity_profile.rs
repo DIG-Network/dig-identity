@@ -20,12 +20,12 @@
 //!
 //! [`IdentityProfile::resolve`] enforces the DID↔store pairing predicate over the CALLER-SUPPLIED
 //! records, exactly as [`crate::pairing::store_belongs_to_did`] does — and inherits its trust
-//! boundary verbatim: the predicate is sound ONLY RELATIVE TO an [`IdentitySingleton`] `coin_id` the
-//! caller has independently resolved on-chain (WU3) as the DID's authentic current singleton coin.
-//! `resolve` does NOT authenticate `coin_id`; it will not launder a producer-supplied coin id into
+//! boundary verbatim: the predicate is sound ONLY RELATIVE TO an [`IdentitySingleton`] `lineage` the
+//! caller has independently resolved on-chain (WU3) as the DID's authentic singleton lineage.
+//! `resolve` does NOT authenticate `lineage`; it will not launder a producer-supplied lineage into
 //! apparent authority. A successful `resolve` means "these records satisfy the pairing predicate",
 //! NOT "this store is chain-authenticated as the DID's profile". Never pass a producer-supplied
-//! `coin_id`.
+//! `lineage`.
 
 use chia_protocol::{Bytes32, Coin};
 
@@ -46,8 +46,8 @@ use crate::value::Value;
 /// [`IdentityProfile::commit_root`] promotes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityProfile {
-    /// The identity anchor: the DID plus the caller-resolved singleton coin id (see the trust
-    /// boundary in the module docs — `coin_id` is NOT authenticated here).
+    /// The identity anchor: the DID plus the caller-resolved singleton lineage (see the trust
+    /// boundary in the module docs — `lineage` is NOT authenticated here).
     singleton: IdentitySingleton,
     /// The paired chip35 DataLayer store record (launch-from-DID lineage).
     store: StoreRecord,
@@ -68,7 +68,7 @@ impl IdentityProfile {
     /// [`Error::NotAuthoritativeProfile`] — so an `IdentityProfile` value can only exist for a store
     /// that satisfies the predicate. The committed [`Self::root`] is computed from `metadata`.
     ///
-    /// See the module-level trust boundary: this is sound only relative to a `singleton.coin_id` the
+    /// See the module-level trust boundary: this is sound only relative to a `singleton.lineage` the
     /// caller resolved on-chain (WU3); `resolve` does not authenticate it.
     pub fn resolve(
         singleton: IdentitySingleton,
@@ -159,7 +159,7 @@ impl IdentityProfile {
         &self.singleton.did
     }
 
-    /// The identity singleton (DID + caller-resolved coin id).
+    /// The identity singleton (DID + caller-resolved lineage).
     pub fn singleton(&self) -> &IdentitySingleton {
         &self.singleton
     }

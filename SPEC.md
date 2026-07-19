@@ -180,25 +180,40 @@ A store is the authoritative profile of an identity anchor only when BOTH links 
    canonical bech32m address codec (`chia-sdk-utils::Address`), so a DID byte-agrees with chip35 and
    the wallet SDK; a string that is not valid `did:chia:` bech32m is not a DID.
 2. **Authority** — the store was LAUNCHED FROM the identity singleton: the store's launcher coin's
-   PARENT coin IS the identity singleton coin (launch-from-DID lineage). This is unforgeable and
-   inherent at launch — it requires no metadata spend, no transfer/ownership layer, and no new chip35
-   puzzle (it is a launch-driver behavior; WU2).
+   PARENT coin is a MEMBER of the identity singleton's lineage — a genuine DID coin somewhere from the
+   launcher forward to the current tip (launch-from-DID lineage). This is unforgeable and inherent at
+   launch — it requires no metadata spend, no transfer/ownership layer, and no new chip35 puzzle (it is
+   a launch-driver behavior; WU2).
+
+   **Membership, NOT tip-equality (NORMATIVE).** Authority MUST be lineage membership, never equality
+   with the current singleton tip. Launching a store (or NFT) from a DID parents its launcher coin to
+   the DID coin AS IT EXISTED AT SPEND TIME (`Cn`), and that SAME spend RECREATES the DID singleton,
+   advancing its tip to `Cn+1` (chip35 `IntermediateLauncher::new(did.coin.coin_id(), ..)` + the DID
+   `update`). So the launcher parent is a PAST lineage coin (`Cn`), never the current tip (`Cn+1`).
+   Binding authority to `== tip` would therefore reject EVERY legitimately-launched profile store the
+   instant it is created. An implementation MUST accept a store whose launcher parent is any genuine
+   lineage member. The security property is preserved: minting any coin in the victim DID's lineage
+   requires the victim's key, so an attacker's coin is never a member — the link stays unforgeable.
 
 Discovery alone is FORGEABLE — anyone may place any DID string in their store description. Therefore a
-consumer MUST require BOTH links: a store that matches on discovery but NOT on launcher-parent lineage
-MUST be REJECTED as non-authoritative.
+consumer MUST require BOTH links: a store that matches on discovery but whose launcher parent is NOT a
+member of the DID singleton's lineage MUST be REJECTED as non-authoritative.
 
 WU1 supplies this predicate over caller-provided records built from **canonical `chia-protocol`
 types** (never hand-rolled coin/hash types):
 
 - `StoreRecord = { description: String, launcher_coin: Coin }` — `launcher_coin.parent_coin_info` is
   the authority channel; `launcher_coin.coin_id()` is the store's launcher id.
-- `IdentitySingleton = { did: Did, coin_id: Bytes32 }` — `coin_id` is the identity singleton coin an
-  authoritative store's launcher parent must equal.
+- `SingletonLineage = { tip: Bytes32, members: Set<Bytes32> }` — the DID singleton's lineage (launcher
+  → tip inclusive; `tip` is always a member). `contains(coin_id)` is the authority membership test;
+  `tip()` is the current on-chain state handle.
+- `IdentitySingleton = { did: Did, lineage: SingletonLineage }` — `lineage` holds the coins one of
+  which an authoritative store's launcher parent must equal. `IdentitySingleton::coin_id()` returns the
+  lineage tip.
 
-`authority_matches` ⇔ `store.launcher_coin.parent_coin_info == singleton.coin_id`. WU3 wires the chain
-fetch that populates these records (one launcher-parent lookup per store, resolving the DID's launcher
-id to its current singleton coin).
+`authority_matches` ⇔ `singleton.lineage.contains(store.launcher_coin.parent_coin_info)`. WU3 wires the
+chain fetch that populates these records (a lineage walk from the DID launcher id forward to its
+current tip).
 
 ### 7.1 Store-ownership predicate and portable proof
 
@@ -211,19 +226,20 @@ of the two records: `verify()` ⇔ `store_belongs_to_did(store, singleton)`, re-
 predicate.
 
 **WU1 trust boundary (NORMATIVE — the predicate is relative, not trustless).** `singleton.did` and
-`singleton.coin_id` are independent, caller-supplied fields with NO internal binding: WU1 does NOT
-authenticate that `coin_id` is `did.launcher_id`'s real singleton coin. The pairing/ownership decision
-is therefore SOUND ONLY RELATIVE TO a `coin_id` — and a `root` (§8) — the verifier has INDEPENDENTLY
-resolved on-chain. A producer who supplies their OWN launcher coin as `coin_id`, with a store they
-launched from it whose `description` names a victim DID, obtains `store_belongs_to_did == true` and
+`singleton.lineage` are independent, caller-supplied fields with NO internal binding: WU1 does NOT
+authenticate that `lineage` is `did.launcher_id`'s real singleton lineage. The pairing/ownership
+decision is therefore SOUND ONLY RELATIVE TO a `lineage` — and a `root` (§8) — the verifier has
+INDEPENDENTLY resolved on-chain. A producer who supplies their OWN singleton's lineage, with a store
+they launched from it whose `description` names a victim DID, obtains `store_belongs_to_did == true` and
 `StoreOwnershipProof::verify() == true` — a spoof of the victim DID. Consequently:
 
 - `StoreOwnershipProof` is NOT a self-authenticating, trustless attestation, and MUST NOT be trusted
   from an untrusted producer. A `true` means only "these records satisfy the predicate", not "this
   store is chain-authenticated as the DID's profile".
-- WU3 MUST resolve `singleton.coin_id` as `did.launcher_id`'s authentic CURRENT singleton coin, and
-  the §8 `root` as THIS store's authentic current on-chain `root_hash`, before any consumer relies on
-  the decision. Producing a portable proof whose `coin_id` is chain-bound to the DID is WU3's job.
+- WU3 MUST resolve `singleton.lineage` as `did.launcher_id`'s authentic singleton lineage (launcher →
+  tip), and the §8 `root` as THIS store's authentic current on-chain `root_hash`, before any consumer
+  relies on the decision. Producing a portable proof whose `lineage` is chain-bound to the DID is WU3's
+  job.
 
 (The conformance vector `store_ownership_proof_is_relative_to_a_trusted_coin_id_not_trustless` pins
 this limitation.)
@@ -249,7 +265,7 @@ valid proof against an unrelated `root` gives a false accept, so WU3 MUST resolv
 ## 8.1 The `IdentityProfile` primitive (the managed DID + store + SMT triple)
 
 `IdentityProfile` is the managed object that composes the three pieces a DIG identity is at rest —
-the identity singleton (§7 `IdentitySingleton` = DID + caller-resolved singleton coin id), the paired
+the identity singleton (§7 `IdentitySingleton` = DID + caller-resolved singleton lineage), the paired
 chip35 DataLayer store (§7 `StoreRecord`), and the profile SMT (§6 `Profile`) with its current
 committed root — into one lifecycle. It **wraps** `Profile` (which is unchanged and still the metadata
 slot-map consumers read directly); it does NOT replace it. It adds only lifecycle wiring over the
@@ -262,7 +278,7 @@ Networkless surface (WU1 — implemented now):
   otherwise `Err(NotAuthoritativeProfile)`. A description-only or lineage-only store is REJECTED, so an
   `IdentityProfile` value cannot exist for an unpaired/spoofed store. The committed root is computed
   from `metadata` (§5/§6). This inherits the §7.1 **trust boundary VERBATIM**: soundness is relative to
-  a `singleton.coin_id` the caller resolved on-chain (WU3); `resolve` does NOT authenticate `coin_id`
+  a `singleton.lineage` the caller resolved on-chain (WU3); `resolve` does NOT authenticate `lineage`
   and MUST NOT be construed as chain authentication.
 - `set(slot, value) -> Result<root>` — edits the in-memory metadata and returns the resulting
   **pending** root; the committed root is unchanged until `commit_root`.
@@ -287,7 +303,7 @@ Chain-gated surface (STUBBED):
 ## 8.2 On-chain DID resolution (WU3)
 
 WU3 closes the §7.1/§8.1 trust boundary: it turns a `did:chia:` string into a **chain-authenticated**
-`IdentityProfile` whose `singleton.coin_id` and profile `root` are BOTH derived from the DID via an
+`IdentityProfile` whose `singleton.lineage` and profile `root` are BOTH derived from the DID via an
 honest chain read, so a consumer may trust the resolved DID authority and keys. It is expressed as a
 caller-supplied `ChainSource` TRAIT, so the crate remains chain- and network-independent (it still
 builds for wasm / no-network targets — the network dependency lives in the consumer's implementation).
@@ -295,8 +311,10 @@ builds for wasm / no-network targets — the network dependency lives in the con
 The `ChainSource` trait an implementation MUST provide (an honest reader of chain state — a full node
 / coinset client, never an attacker-controlled channel):
 
-- `resolve_singleton_tip(launcher_id) -> Option<Coin>` — walks the singleton lineage from
-  `launcher_id` to its current unspent tip coin, or `None` if unlaunched/melted.
+- `resolve_singleton_lineage(launcher_id) -> Option<SingletonLineage>` — walks the singleton lineage
+  from `launcher_id` forward to its current unspent tip, returning EVERY coin id on that walk (a
+  `SingletonLineage` whose `tip` is the current coin), or `None` if unlaunched/melted. The caller
+  implements the walk against its own chain backend (coinset / full node).
 - `find_stores_for_did(did) -> Vec<ChainStoreState>` — every store whose CURRENT on-chain description
   names `did` (a discovery scan; over-returning is safe, authority is re-checked).
 - `fetch_profile(store, root_hash) -> Profile` — the store's current profile body (untrusted until
@@ -309,11 +327,13 @@ The resolution algorithm (each step trust-critical), which a conforming implemen
 
 1. Parse the DID → `launcher_id` (§ the canonical bech32m codec); a non-`did:chia:` input is
    `InvalidDid`.
-2. Resolve the AUTHENTIC singleton coin by walking `launcher_id`'s lineage to its tip; its coin id is
-   the ONLY value trusted as `IdentitySingleton.coin_id`. It is derived from the DID, NEVER accepted
-   from a producer — this is what defeats authority-laundering. No tip → `NoIdentitySingleton`.
+2. Resolve the AUTHENTIC singleton lineage by walking `launcher_id`'s lineage from the launcher to its
+   tip; every coin id on that walk is the ONLY authority trusted as `IdentitySingleton.lineage`. It is
+   derived from the DID, NEVER accepted from a producer — this is what defeats authority-laundering. No
+   lineage → `NoIdentitySingleton`.
 3. Keep only discovered candidates that satisfy the FULL §7.1 pairing predicate (description names the
-   DID AND launcher parent == the step-2 coin). Zero → `NoProfile`; more than one → `AmbiguousProfile`.
+   DID AND launcher parent is a MEMBER of the step-2 lineage — see §7's membership-not-tip-equality
+   rule). Zero → `NoProfile`; more than one → `AmbiguousProfile`.
 4. Bind the chosen store's fetched profile body to its current on-chain `root_hash`; a body that hashes
    to a different root is `StaleOrTamperedRoot`. Only then are the profile key slots (§6) trusted.
 

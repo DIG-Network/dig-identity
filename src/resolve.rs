@@ -1,7 +1,7 @@
 //! WU3 — on-chain DID resolution: from a `did:chia:` string to its **chain-authenticated** profile.
 //!
 //! WU1 ([`crate::pairing`], [`crate::identity_profile`]) reasons over caller-supplied records and is
-//! sound only RELATIVE TO an [`IdentitySingleton`] `coin_id` the caller resolved on-chain. WU3 closes
+//! sound only RELATIVE TO an [`IdentitySingleton`] `lineage` the caller resolved on-chain. WU3 closes
 //! that boundary: it derives everything trust-critical from the DID string itself, using a caller-
 //! supplied [`ChainSource`] purely as an honest READER of chain state — never as a source of
 //! authority claims.
@@ -11,21 +11,24 @@
 //! Given only a DID string:
 //!
 //! 1. **Parse** the DID → its permanent `launcher_id` (canonical bech32m — [`Did::parse`]).
-//! 2. **Resolve the authentic singleton coin.** Walk the DID singleton's lineage from `launcher_id`
-//!    to its current unspent tip ([`ChainSource::resolve_singleton_tip`]). The tip coin's id is the
-//!    ONLY value trusted as [`IdentitySingleton::coin_id`]. It is derived from the DID (via
-//!    `launcher_id`), NEVER accepted from a producer — this is what defeats the authority-laundering
-//!    spoof (an attacker handing you their own launcher coin + a store that merely names the victim
-//!    DID in its description).
+//! 2. **Resolve the authentic singleton lineage.** Walk the DID singleton's lineage from `launcher_id`
+//!    to its current unspent tip ([`ChainSource::resolve_singleton_lineage`]). Every coin id on that
+//!    walk is trusted as the DID's [`SingletonLineage`]; its tip is [`IdentitySingleton::coin_id`]. It
+//!    is derived from the DID (via `launcher_id`), NEVER accepted from a producer — this is what
+//!    defeats the authority-laundering spoof (an attacker handing you their own launcher coin + a store
+//!    that merely names the victim DID in its description).
 //! 3. **Discover candidate stores** whose on-chain description names the DID
-//!    ([`ChainSource::find_stores_for_did`]) and keep ONLY those whose launcher parent is the authentic
-//!    singleton coin from step 2 (the [`crate::pairing`] predicate — description AND launch-from-DID
-//!    lineage). Zero → [`ResolveError::NoProfile`]; more than one → [`ResolveError::AmbiguousProfile`].
+//!    ([`ChainSource::find_stores_for_did`]) and keep ONLY those whose launcher parent is a MEMBER of
+//!    the authentic singleton lineage from step 2 (the [`crate::pairing`] predicate — description AND
+//!    launch-from-DID lineage). Membership (not tip-equality) is required because launching a store
+//!    from a DID recreates the DID coin in the same spend, so the launcher parent is a PAST lineage
+//!    coin, never the current tip. Zero → [`ResolveError::NoProfile`]; more than one →
+//!    [`ResolveError::AmbiguousProfile`].
 //! 4. **Bind the root.** Fetch the chosen store's profile content ([`ChainSource::fetch_profile`]) and
 //!    require it to hash to that store's CURRENT on-chain `root_hash` — a stale/rolled-back/tampered
 //!    body is [`ResolveError::StaleOrTamperedRoot`]. Only then are the profile's key slots trusted.
 //!
-//! The result is an [`IdentityProfile`] whose `singleton.coin_id` and `root` are both chain-derived,
+//! The result is an [`IdentityProfile`] whose `singleton.lineage` and `root` are both chain-derived,
 //! so [`IdentityProfile::did`] / [`IdentityProfile::store_belongs_to_did`] / the resolved keys are
 //! authority a consumer (dig-node's `DidSigningKeyResolver`, dig-chat, the extension, hub) can trust.
 //!
@@ -36,12 +39,12 @@
 //! and cannot defend against a source that fabricates the chain itself. Its job is to ensure that,
 //! given honest chain data, no third-party-supplied record can launder itself into DID authority.
 
-use chia_protocol::{Bytes32, Coin};
+use chia_protocol::Bytes32;
 
 use crate::did::Did;
 use crate::identity_profile::IdentityProfile;
 use crate::keys::DidKeys;
-use crate::pairing::{is_authoritative_profile, IdentitySingleton, StoreRecord};
+use crate::pairing::{is_authoritative_profile, IdentitySingleton, SingletonLineage, StoreRecord};
 use crate::profile::Profile;
 
 /// A candidate profile store as READ FROM CHAIN: its pairing record plus its current committed root.
@@ -68,17 +71,25 @@ pub trait ChainSource {
     /// The source's own fetch/transport error, surfaced verbatim through [`ResolveError::Chain`].
     type Error: core::fmt::Display;
 
-    /// Walks the singleton lineage from `launcher_id` to its current unspent tip coin.
+    /// Walks the singleton lineage from `launcher_id` to its current unspent tip, returning EVERY coin
+    /// id on that walk as a [`SingletonLineage`].
     ///
     /// Returns `None` when the launcher never existed or the singleton has been fully spent (melted).
-    /// The returned coin's id is the value WU3 trusts as the identity singleton's authentic current
-    /// `coin_id` — so this MUST be a genuine lineage walk, not an echo of a caller-supplied coin.
-    fn resolve_singleton_tip(&self, launcher_id: Bytes32) -> Result<Option<Coin>, Self::Error>;
+    /// The returned lineage is the value WU3 trusts as the identity singleton's authentic lineage — so
+    /// this MUST be a genuine forward walk from the DID launcher to its tip (each coin the singleton
+    /// recreation of the previous), NEVER an echo of a caller-supplied coin. WU3 accepts a store whose
+    /// launcher parent is ANY member of this lineage (a store launched from the DID parents to the DID
+    /// coin at spend time, which the same spend advances past — so the parent is a past lineage coin,
+    /// not the tip). The caller implements the walk against its own chain backend (coinset / full node).
+    fn resolve_singleton_lineage(
+        &self,
+        launcher_id: Bytes32,
+    ) -> Result<Option<SingletonLineage>, Self::Error>;
 
     /// Returns every store whose CURRENT on-chain description names `did` (the discovery scan).
     ///
-    /// Over-returning is safe: WU3 re-checks the full pairing predicate (description AND launch-from-
-    /// DID lineage) against the chain-resolved singleton coin, so non-authoritative candidates are
+    /// Over-returning is safe: WU3 re-checks the full pairing predicate (description AND launcher
+    /// parent is a member of the chain-resolved singleton lineage), so non-authoritative candidates are
     /// discarded. The source need not itself enforce authority.
     fn find_stores_for_did(&self, did: &Did) -> Result<Vec<ChainStoreState>, Self::Error>;
 
@@ -137,7 +148,7 @@ pub enum ResolveError {
 /// Resolves a `did:chia:` DID to its **chain-authenticated** [`IdentityProfile`].
 ///
 /// This is the trust anchor of the crate: unlike [`IdentityProfile::resolve`] (which trusts a
-/// caller-supplied `coin_id`), this derives the singleton coin and the profile root from the DID via
+/// caller-supplied `lineage`), this derives the singleton lineage and the profile root from the DID via
 /// `source`, so the returned profile's DID authority and keys are chain-backed. See the module docs
 /// for the step-by-step guarantee. Fails closed on every ambiguity or mismatch (see [`ResolveError`]).
 pub fn resolve_identity_profile<S: ChainSource>(
@@ -146,17 +157,18 @@ pub fn resolve_identity_profile<S: ChainSource>(
 ) -> Result<IdentityProfile, ResolveError> {
     let did = Did::parse(did_uri).ok_or(ResolveError::InvalidDid)?;
 
-    // The authentic singleton coin, derived from the DID (never producer-supplied).
-    let tip = source
-        .resolve_singleton_tip(did.launcher_id())
+    // The authentic singleton lineage, derived from the DID (never producer-supplied).
+    let lineage = source
+        .resolve_singleton_lineage(did.launcher_id())
         .map_err(chain_error)?
         .ok_or(ResolveError::NoIdentitySingleton)?;
     let singleton = IdentitySingleton {
         did: did.clone(),
-        coin_id: tip.coin_id(),
+        lineage,
     };
 
-    // Keep only candidates that satisfy the FULL pairing predicate against that authentic coin.
+    // Keep only candidates that satisfy the FULL pairing predicate: description names the DID AND the
+    // launcher parent is a member of the authentic lineage (a genuine launch-from-DID coin).
     let mut authentic = source
         .find_stores_for_did(&did)
         .map_err(chain_error)?
@@ -219,6 +231,7 @@ mod tests {
     use crate::did::DID_CHIA_PREFIX;
     use crate::slot::standard;
     use crate::value::Value;
+    use chia_protocol::Coin;
     use chia_sdk_utils::Address;
 
     /// The Ed25519 signing key a well-formed test profile publishes (slot `0x0010`).
@@ -231,6 +244,8 @@ mod tests {
             .unwrap()
     }
 
+    /// A coin with the given parent. The pairing predicate reads only `parent_coin_info`; a coin's own
+    /// id is `coin_id()`.
     fn coin(parent: Bytes32) -> Coin {
         Coin::new(parent, Bytes32::new([9u8; 32]), 1)
     }
@@ -250,26 +265,27 @@ mod tests {
         Bytes32::new(profile.build_root().unwrap())
     }
 
-    /// An in-memory honest chain view for tests: a configurable DID singleton tip, candidate stores,
-    /// and the profile body returned by every `fetch_profile`.
+    /// An in-memory honest chain view for tests: a configurable DID singleton lineage, candidate
+    /// stores, and the profile body returned by every `fetch_profile`.
     struct MockSource {
-        tip: Option<Coin>,
+        lineage: Option<SingletonLineage>,
         stores: Vec<ChainStoreState>,
         fetched: Profile,
         fail: Option<&'static str>,
     }
 
     impl MockSource {
-        /// The happy path: one authoritative store launched from the DID's singleton tip.
+        /// The happy path: one authoritative store launched from the DID's (single-coin) singleton
+        /// lineage tip. Returns the source and the lineage tip coin id.
         fn authoritative(did_uri: &str) -> (Self, Bytes32) {
-            let tip = coin(Bytes32::new([1u8; 32]));
+            let did_coin = coin(Bytes32::new([1u8; 32]));
             let profile = keyed_profile();
             let store = StoreRecord {
                 description: did_uri.to_string(),
-                launcher_coin: coin(tip.coin_id()),
+                launcher_coin: coin(did_coin.coin_id()),
             };
             let source = MockSource {
-                tip: Some(tip),
+                lineage: Some(SingletonLineage::single(did_coin.coin_id())),
                 stores: vec![ChainStoreState {
                     store,
                     root_hash: root_of(&profile),
@@ -277,20 +293,20 @@ mod tests {
                 fetched: profile,
                 fail: None,
             };
-            (source, tip.coin_id())
+            (source, did_coin.coin_id())
         }
     }
 
     impl ChainSource for MockSource {
         type Error = &'static str;
 
-        fn resolve_singleton_tip(
+        fn resolve_singleton_lineage(
             &self,
             _launcher_id: Bytes32,
-        ) -> Result<Option<Coin>, Self::Error> {
+        ) -> Result<Option<SingletonLineage>, Self::Error> {
             match self.fail {
-                Some("tip") => Err("tip fetch failed"),
-                _ => Ok(self.tip),
+                Some("tip") => Err("lineage fetch failed"),
+                _ => Ok(self.lineage.clone()),
             }
         }
 
@@ -336,8 +352,8 @@ mod tests {
         let (source, coin_id) = MockSource::authoritative(&did_uri);
 
         let profile = resolve_identity_profile(&did_uri, &source).unwrap();
-        // The singleton coin id is the chain tip, not any producer-supplied value.
-        assert_eq!(profile.singleton().coin_id, coin_id);
+        // The singleton coin id is the chain lineage tip, not any producer-supplied value.
+        assert_eq!(profile.singleton().coin_id(), coin_id);
         assert!(profile.store_belongs_to_did());
         assert_eq!(profile.root(), keyed_profile().build_root().unwrap());
     }
@@ -355,7 +371,7 @@ mod tests {
     fn unlaunched_or_melted_singleton_is_no_identity() {
         let did_uri = did_for(Bytes32::new([42u8; 32]));
         let (mut source, _) = MockSource::authoritative(&did_uri);
-        source.tip = None;
+        source.lineage = None;
         assert_eq!(
             resolve_identity_profile(&did_uri, &source),
             Err(ResolveError::NoIdentitySingleton)
@@ -375,9 +391,10 @@ mod tests {
 
     #[test]
     fn authority_laundering_spoof_is_rejected() {
-        // A store that NAMES the victim DID in its description but was launched from an ATTACKER coin
-        // (not the DID's authentic singleton tip) must never resolve — the launch-from-DID lineage
-        // fails, so it is discarded and the DID has no authoritative profile.
+        // THE SAFETY PROPERTY. A store that NAMES the victim DID in its description but was launched
+        // from an ATTACKER coin (NOT a member of the victim DID's singleton lineage) must never
+        // resolve -- minting any coin in the victim's lineage requires the victim's key, so the
+        // attacker coin is absent from it. The candidate is discarded and the DID has no profile.
         let did_uri = did_for(Bytes32::new([42u8; 32]));
         let (mut source, _) = MockSource::authoritative(&did_uri);
         let attacker_coin = coin(Bytes32::new([0xEE; 32]));
@@ -389,17 +406,42 @@ mod tests {
     }
 
     #[test]
-    fn store_parented_to_launcher_not_tip_is_rejected() {
-        // Binding is to the resolved lineage TIP, not the raw launcher id: a store parented to an
-        // earlier/stale coin is not authoritative.
+    fn store_parented_to_past_lineage_coin_is_accepted() {
+        // Authority is lineage MEMBERSHIP, not tip-equality: a store parented to a genuine PAST coin in
+        // the DID singleton's lineage (an earlier tip / the launch-time DID coin) IS authoritative.
         let did_uri = did_for(Bytes32::new([42u8; 32]));
         let (mut source, _) = MockSource::authoritative(&did_uri);
-        let did = Did::parse(&did_uri).unwrap();
-        source.stores[0].store.launcher_coin = coin(did.launcher_id());
-        assert_eq!(
-            resolve_identity_profile(&did_uri, &source),
-            Err(ResolveError::NoProfile)
-        );
+
+        // Lineage launcher -> c1 -> tip; the store was launched from the middle coin `c1`.
+        let launcher = Bytes32::new([0xA0; 32]);
+        let c1 = coin(launcher).coin_id();
+        let tip = coin(c1).coin_id();
+        source.lineage = Some(SingletonLineage::new(tip, [launcher, c1, tip]));
+        source.stores[0].store.launcher_coin = coin(c1);
+
+        let profile = resolve_identity_profile(&did_uri, &source).unwrap();
+        assert_eq!(profile.singleton().coin_id(), tip);
+        assert!(profile.store_belongs_to_did());
+    }
+
+    #[test]
+    fn store_launched_then_did_spent_still_resolves() {
+        // Regression for the WU3 gating bug (#778): launching a store FROM a DID recreates the DID coin
+        // in the SAME spend. The store's launcher parent is the launch-time DID coin `Cn`; that spend
+        // advances the singleton tip to `Cn+1`. With tip-EQUALITY the store would be rejected the
+        // instant it is launched -- breaking EVERY legitimate profile. Lineage MEMBERSHIP accepts it.
+        let did_uri = did_for(Bytes32::new([42u8; 32]));
+        let (mut source, _) = MockSource::authoritative(&did_uri);
+
+        let cn = coin(Bytes32::new([0xB0; 32])).coin_id(); // the DID coin at store-launch spend time
+        let cn_plus_1 = coin(cn).coin_id(); // the DID recreated by that same spend (the new tip)
+        source.lineage = Some(SingletonLineage::new(cn_plus_1, [cn, cn_plus_1]));
+        // The store parents to Cn (the launch-time DID coin), NOT to the current tip Cn+1.
+        source.stores[0].store.launcher_coin = coin(cn);
+
+        let profile = resolve_identity_profile(&did_uri, &source).unwrap();
+        assert_eq!(profile.singleton().coin_id(), cn_plus_1);
+        assert_eq!(profile.keys().signing_public_key, Some(SIGNING_KEY));
     }
 
     #[test]

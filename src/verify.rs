@@ -33,10 +33,10 @@ use crate::value::Value;
 /// - [`Error::FieldProofRejected`] — the field's merkle proof did not verify against `root`.
 ///
 /// **Trust boundary:** both inputs the caller supplies are unauthenticated here and MUST be
-/// independently resolved on-chain (WU3): `singleton.coin_id` MUST be the DID's authentic current
-/// singleton coin (see [`store_belongs_to_did`] — a producer-supplied `coin_id` is spoofable), and
+/// independently resolved on-chain (WU3): `singleton.lineage` MUST be the DID's authentic singleton
+/// lineage (see [`store_belongs_to_did`] — a producer-supplied `lineage` is spoofable), and
 /// `root` MUST be THIS store's authentic current on-chain `root_hash`. A valid membership proof
-/// against an unrelated `root` gives a false accept, exactly as a wrong `coin_id` does.
+/// against an unrelated `root` gives a false accept, exactly as a wrong `lineage` does.
 pub fn verify_profile_field_for_did(
     singleton: &IdentitySingleton,
     store: &StoreRecord,

@@ -7,7 +7,7 @@
 
 use dig_identity::did::parse_did_from_description;
 use dig_identity::pairing::{
-    evaluate_pairing, is_authoritative_profile, IdentitySingleton, StoreRecord,
+    evaluate_pairing, is_authoritative_profile, IdentitySingleton, SingletonLineage, StoreRecord,
 };
 use dig_identity::proof::{verify_membership, verify_non_membership};
 use dig_identity::slot::{standard, SlotId};
@@ -314,7 +314,7 @@ const SINGLETON_COIN_ID: [u8; 32] = [0xAA; 32];
 fn singleton() -> IdentitySingleton {
     IdentitySingleton {
         did: Did::parse(&did_string([0x22; 32])).unwrap(),
-        coin_id: Bytes32::from(SINGLETON_COIN_ID),
+        lineage: SingletonLineage::single(Bytes32::from(SINGLETON_COIN_ID)),
     }
 }
 
@@ -465,23 +465,23 @@ fn store_belongs_to_did_and_ownership_proof_require_both_links() {
 #[test]
 fn store_ownership_proof_is_relative_to_a_trusted_coin_id_not_trustless() {
     // Pins the DOCUMENTED trust boundary of `StoreOwnershipProof` (NOT a bug): `verify()` re-runs the
-    // pairing predicate, but `singleton.coin_id` is a caller-supplied field the predicate does NOT
+    // pairing predicate, but `singleton.lineage` is a caller-supplied field the predicate does NOT
     // authenticate. So an attacker can forge a proof that passes the predicate yet does NOT prove
-    // on-chain ownership — which is exactly why WU3 MUST resolve `coin_id` on-chain (as the DID's
-    // authentic current singleton coin) before any consumer trusts this bundle.
+    // on-chain ownership — which is exactly why WU3 MUST resolve `lineage` on-chain (as the DID's
+    // authentic singleton lineage) before any consumer trusts this bundle.
     //
     use dig_identity::StoreOwnershipProof;
     // The attack: the attacker launches store S from their OWN coin `C_att`, describes S as the
-    // VICTIM's DID, and supplies `coin_id = C_att` (their own coin, never resolved against the victim
-    // DID's real singleton). Discovery ✓ (description names the victim DID) and authority ✓
-    // (`launcher_coin.parent == C_att == coin_id`) → the predicate accepts.
+    // VICTIM's DID, and supplies a `lineage` containing `C_att` (their own coin, never resolved against
+    // the victim DID's real singleton). Discovery ✓ (description names the victim DID) and authority ✓
+    // (`launcher_coin.parent == C_att ∈ lineage`) → the predicate accepts.
     let victim_did = Did::parse(&did_string([0x22; 32])).unwrap();
     let attacker_coin_id = Bytes32::from([0xEE; 32]); // C_att — the attacker's own coin, NOT resolved
 
     let forged = StoreOwnershipProof::new(
         IdentitySingleton {
             did: victim_did,
-            coin_id: attacker_coin_id,
+            lineage: SingletonLineage::single(attacker_coin_id),
         },
         StoreRecord {
             description: did_string([0x22; 32]), // claims to be the victim DID's profile

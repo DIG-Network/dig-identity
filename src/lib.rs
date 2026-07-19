@@ -70,7 +70,7 @@ pub use identity_profile::IdentityProfile;
 pub use keys::DidKeys;
 pub use pairing::{
     evaluate_pairing, is_authoritative_profile, store_belongs_to_did, IdentitySingleton,
-    PairingOutcome, StoreOwnershipProof, StoreRecord,
+    PairingOutcome, SingletonLineage, StoreOwnershipProof, StoreRecord,
 };
 
 // Re-export the canonical Chia types the public API speaks, so consumers pin the same versions.
