@@ -1,6 +1,7 @@
 # dig-identity — normative specification
 
-Version: 0.2.0 (WU1 format layer + the `IdentityProfile` primitive). Status: NORMATIVE.
+Version: 0.3.0 (WU1 format layer + the `IdentityProfile` primitive + the WU3 chain-resolution seam).
+Status: NORMATIVE.
 
 This document is the authoritative contract for the DIG decentralized-identity **profile format**. An
 independent implementation (Rust, TypeScript, or wasm) built to this document MUST produce
@@ -282,6 +283,55 @@ Chain-gated surface (STUBBED):
   launch driver ships as a WU2 follow-on. The signature exists now so consumers code against the final
   shape; when the gate lifts it will additionally yield the launch spend bundle and take the owner
   delegation.
+
+## 8.2 On-chain DID resolution (WU3)
+
+WU3 closes the §7.1/§8.1 trust boundary: it turns a `did:chia:` string into a **chain-authenticated**
+`IdentityProfile` whose `singleton.coin_id` and profile `root` are BOTH derived from the DID via an
+honest chain read, so a consumer may trust the resolved DID authority and keys. It is expressed as a
+caller-supplied `ChainSource` TRAIT, so the crate remains chain- and network-independent (it still
+builds for wasm / no-network targets — the network dependency lives in the consumer's implementation).
+
+The `ChainSource` trait an implementation MUST provide (an honest reader of chain state — a full node
+/ coinset client, never an attacker-controlled channel):
+
+- `resolve_singleton_tip(launcher_id) -> Option<Coin>` — walks the singleton lineage from
+  `launcher_id` to its current unspent tip coin, or `None` if unlaunched/melted.
+- `find_stores_for_did(did) -> Vec<ChainStoreState>` — every store whose CURRENT on-chain description
+  names `did` (a discovery scan; over-returning is safe, authority is re-checked).
+- `fetch_profile(store, root_hash) -> Profile` — the store's current profile body (untrusted until
+  bound to `root_hash`).
+
+`ChainStoreState = { store: StoreRecord, root_hash: Bytes32 }` (the §7 pairing record plus the store
+singleton's current on-chain committed root).
+
+The resolution algorithm (each step trust-critical), which a conforming implementation MUST perform:
+
+1. Parse the DID → `launcher_id` (§ the canonical bech32m codec); a non-`did:chia:` input is
+   `InvalidDid`.
+2. Resolve the AUTHENTIC singleton coin by walking `launcher_id`'s lineage to its tip; its coin id is
+   the ONLY value trusted as `IdentitySingleton.coin_id`. It is derived from the DID, NEVER accepted
+   from a producer — this is what defeats authority-laundering. No tip → `NoIdentitySingleton`.
+3. Keep only discovered candidates that satisfy the FULL §7.1 pairing predicate (description names the
+   DID AND launcher parent == the step-2 coin). Zero → `NoProfile`; more than one → `AmbiguousProfile`.
+4. Bind the chosen store's fetched profile body to its current on-chain `root_hash`; a body that hashes
+   to a different root is `StaleOrTamperedRoot`. Only then are the profile key slots (§6) trusted.
+
+Public entry points:
+
+- `resolve_identity_profile(did_uri, source) -> Result<IdentityProfile, ResolveError>` — the full
+  chain-authenticated resolution above.
+- `resolve::resolve_did_keys(did_uri, source) -> Result<DidKeys, ResolveError>` — the §6 key set of the
+  chain-authenticated profile.
+- `resolve_signing_key(did_uri, source) -> Result<[u8; 32], ResolveError>` — slot `0x0010`, the exact
+  seam a dig-node `DidSigningKeyResolver` consumes; `NoSigningKey` when the authoritative profile
+  publishes none.
+
+Every failure fails CLOSED (`ResolveError`): `InvalidDid`, `NoIdentitySingleton`, `NoProfile`,
+`AmbiguousProfile`, `StaleOrTamperedRoot`, `NoSigningKey`, `Format`, `Chain`. A resolver NEVER yields
+authority it could not fully authenticate against the chain.
+
+The DID→dig-store minting driver (WU2, `mint_from_did`) remains a follow-on (§8.1).
 
 ## 9. Conformance
 

@@ -6,7 +6,7 @@
 use thiserror::Error;
 
 /// A failure decoding a value, building/proving over the tree, or evaluating the pairing predicate.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum Error {
     /// A value blob was shorter than its declared header or length prefix.
     #[error("value encoding is truncated: {0}")]
