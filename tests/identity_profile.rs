@@ -4,7 +4,7 @@
 //! that the mint driver is a typed, gated stub. All records are caller-supplied (WU1 is chain-free).
 
 use chia_sdk_utils::Address;
-use dig_identity::pairing::{IdentitySingleton, StoreRecord};
+use dig_identity::pairing::{IdentitySingleton, SingletonLineage, StoreRecord};
 use dig_identity::proof::{verify_membership, verify_non_membership};
 use dig_identity::slot::standard;
 use dig_identity::{Bytes32, Coin, Did, Error, IdentityProfile, Profile, Value};
@@ -33,7 +33,7 @@ fn did_string(launcher: [u8; 32]) -> String {
 fn singleton() -> IdentitySingleton {
     IdentitySingleton {
         did: Did::parse(&did_string(DID_LAUNCHER)).unwrap(),
-        coin_id: Bytes32::from(SINGLETON_COIN_ID),
+        lineage: SingletonLineage::single(Bytes32::from(SINGLETON_COIN_ID)),
     }
 }
 

@@ -6,9 +6,11 @@
 //! and writes the same bytes, and any field can be proved (or proved absent) against a single
 //! 32-byte root.
 //!
-//! This crate is **WU1**: the pure, CHAIN-INDEPENDENT format layer. It has NO chain calls, NO
-//! chip35 dependency, and NO DID resolution — those are WU2/WU3. It is also **keyless**: it never
-//! signs (dig-node's signer does that later, mirroring chip35's posture).
+//! The format core is **CHAIN-INDEPENDENT** (no chain calls, no chip35 dependency) and **keyless**
+//! (it never signs — dig-node's signer does that later, mirroring chip35's posture). WU3 adds
+//! on-chain DID resolution as a caller-supplied [`ChainSource`] TRAIT seam ([`resolve`]), so the
+//! crate still holds no network dependency and builds unchanged for wasm / no-network targets. The
+//! DID→dig-store minting driver (WU2) remains a follow-on.
 //!
 //! ## What lives here
 //!
@@ -24,6 +26,7 @@
 //! | The canonical XCH receive-address field codec | [`xch`] |
 //! | The DID↔store bidirectional-pairing predicate + ownership proof | [`pairing`] |
 //! | Composed "this datum belongs to this DID" verification | [`verify`] |
+//! | On-chain DID→profile resolution over a caller [`ChainSource`] (WU3) | [`resolve`] |
 //!
 //! ## Proving a field against a root
 //!
@@ -54,6 +57,7 @@ pub mod keys;
 pub mod pairing;
 pub mod profile;
 pub mod proof;
+pub mod resolve;
 pub mod slot;
 pub mod tree;
 pub mod value;
@@ -66,13 +70,18 @@ pub use identity_profile::IdentityProfile;
 pub use keys::DidKeys;
 pub use pairing::{
     evaluate_pairing, is_authoritative_profile, store_belongs_to_did, IdentitySingleton,
-    PairingOutcome, StoreOwnershipProof, StoreRecord,
+    PairingOutcome, SingletonLineage, StoreOwnershipProof, StoreRecord,
 };
 
 // Re-export the canonical Chia types the public API speaks, so consumers pin the same versions.
 pub use chia_protocol::{Bytes32, Coin};
 pub use profile::{resolve_did_keys, Profile};
 pub use proof::{verify_membership, verify_non_membership, ProfileProof};
+// The WU3 on-chain resolution seam. The chain `resolve_did_keys` stays module-qualified
+// (`resolve::resolve_did_keys`) to avoid colliding with the networkless [`profile::resolve_did_keys`].
+pub use resolve::{
+    resolve_identity_profile, resolve_signing_key, ChainSource, ChainStoreState, ResolveError,
+};
 pub use slot::SlotId;
 pub use tree::ProfileTree;
 pub use value::{Value, ValueTag};

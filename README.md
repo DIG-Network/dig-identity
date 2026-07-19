@@ -5,9 +5,10 @@ singleton in v1) paired with a chip35 DataLayer store that holds the anchor's pr
 extendable **sparse merkle tree** of slots. Each identity field lives at a fixed slot; any field can
 be proved — or proved absent — against a single 32-byte root.
 
-This crate is **WU1**: the pure, chain-independent format layer. It is keyless (never signs) and does
-no chain I/O or DID resolution (those are WU2/WU3). See [`SPEC.md`](./SPEC.md) for the normative
-byte-level contract.
+The format core is keyless (never signs) and holds no network dependency. On-chain DID resolution
+(WU3) is a caller-supplied `ChainSource` **trait** seam — so the crate still builds for wasm /
+no-network targets. The DID→dig-store minting driver (WU2) is a follow-on. See [`SPEC.md`](./SPEC.md)
+for the normative byte-level contract.
 
 ## What it provides
 
@@ -75,6 +76,25 @@ let pay_to = identity.xch_address();         // the $DIG-payments seam, if publi
 > Soundness is **relative to** a `coin_id` you resolved on-chain yourself. `resolve` verifies the
 > pairing predicate over the records you give it; it does not authenticate the coin id for you. Never
 > pass a coin id supplied by an untrusted producer.
+
+### Resolve a DID on-chain (WU3)
+
+When you have a chain backend, `resolve_identity_profile` does the authentication for you: from just a
+`did:chia:` string it walks the DID singleton to its authentic current coin, finds the paired store,
+binds the profile body to the store's current on-chain root, and fails closed on anything ambiguous or
+spoofed. Implement `ChainSource` over your backend (a full node, coinset.org, `chia-query`):
+
+```rust
+use dig_identity::{resolve_signing_key, resolve_identity_profile, ChainSource};
+
+// `source: impl ChainSource` reads your chain honestly (it is never trusted for authority claims).
+let identity = resolve_identity_profile("did:chia:1...", &source)?; // chain-authenticated
+let signing_key = resolve_signing_key("did:chia:1...", &source)?;   // slot 0x0010, fails closed
+```
+
+This is the seam dig-node's `DidSigningKeyResolver` consumes: a DID resolves to a signing key ONLY
+when a chain-authenticated identity actually published one — never one attached by an unauthenticated
+party.
 
 ### Edit and commit the root
 
