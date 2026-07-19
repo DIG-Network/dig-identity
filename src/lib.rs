@@ -6,11 +6,12 @@
 //! and writes the same bytes, and any field can be proved (or proved absent) against a single
 //! 32-byte root.
 //!
-//! The format core is **CHAIN-INDEPENDENT** (no chain calls, no chip35 dependency) and **keyless**
-//! (it never signs — dig-node's signer does that later, mirroring chip35's posture). WU3 adds
-//! on-chain DID resolution as a caller-supplied [`ChainSource`] TRAIT seam ([`resolve`]), so the
-//! crate still holds no network dependency and builds unchanged for wasm / no-network targets. The
-//! DID→dig-store minting driver (WU2) remains a follow-on.
+//! The format core is **CHAIN-INDEPENDENT** (no chain calls, no chip35 dependency). WU3 adds on-chain
+//! DID resolution as a caller-supplied [`ChainSource`] TRAIT seam ([`resolve`]), so the crate still
+//! holds no network dependency and builds unchanged for wasm / no-network targets. The v2 **BLS
+//! identity key model** ([`bls`], SPEC §6a) — the single BLS12-381 G1 key that does both sign (G2)
+//! and seal-DH (G1) — is behind the default-on `bls` feature, so the pure format layer still builds
+//! with `default-features = false`. The DID→dig-store minting driver (WU2) remains a follow-on.
 //!
 //! ## What lives here
 //!
@@ -27,13 +28,14 @@
 //! | The DID↔store bidirectional-pairing predicate + ownership proof | [`pairing`] |
 //! | Composed "this datum belongs to this DID" verification | [`verify`] |
 //! | On-chain DID→profile resolution over a caller [`ChainSource`] (WU3) | [`resolve`] |
+//! | The BLS12-381 G1 identity key model: derivation + sign/seal primitives (§6a) | [`bls`] |
 //!
 //! ## Proving a field against a root
 //!
 //! ```
 //! use dig_identity::{Profile, Value, slot::standard, proof};
 //!
-//! let mut profile = Profile::with_schema_v1();
+//! let mut profile = Profile::with_schema_v2();
 //! profile.set(standard::DISPLAY_NAME, Value::Utf8("Ada".into()));
 //!
 //! let tree = profile.build_tree().unwrap();
@@ -44,11 +46,13 @@
 //! let claim = Value::Utf8("Ada".into());
 //! assert!(proof::verify_membership(&root, standard::DISPLAY_NAME, &claim, &membership).unwrap());
 //!
-//! // Prove no encryption key is present.
-//! let absent = tree.prove_non_membership(standard::ENCRYPTION_PUBLIC_KEY).unwrap();
-//! assert!(proof::verify_non_membership(&root, standard::ENCRYPTION_PUBLIC_KEY, &absent).unwrap());
+//! // Prove no peer id is present.
+//! let absent = tree.prove_non_membership(standard::PEER_ID).unwrap();
+//! assert!(proof::verify_non_membership(&root, standard::PEER_ID, &absent).unwrap());
 //! ```
 
+#[cfg(feature = "bls")]
+pub mod bls;
 pub mod did;
 pub mod error;
 pub mod hash;
@@ -80,7 +84,13 @@ pub use proof::{verify_membership, verify_non_membership, ProfileProof};
 // The WU3 on-chain resolution seam. The chain `resolve_did_keys` stays module-qualified
 // (`resolve::resolve_did_keys`) to avoid colliding with the networkless [`profile::resolve_did_keys`].
 pub use resolve::{
-    resolve_identity_profile, resolve_signing_key, ChainSource, ChainStoreState, ResolveError,
+    resolve_bls_public_key, resolve_identity_profile, ChainSource, ChainStoreState, ResolveError,
+};
+// The BLS12-381 G1 identity key model (§6a), behind the default-on `bls` feature.
+#[cfg(feature = "bls")]
+pub use bls::{
+    derive_identity_sk, g1_dh, g1_subgroup_check, master_secret_key_from_seed, public_key_bytes,
+    sign_message, verify_signature, IDENTITY_DERIVATION_PATH,
 };
 pub use slot::SlotId;
 pub use tree::ProfileTree;

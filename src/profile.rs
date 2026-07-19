@@ -27,12 +27,12 @@ impl Profile {
         Self::default()
     }
 
-    /// Creates a profile pre-stamped with the v1 schema version in slot `0x0000`.
-    pub fn with_schema_v1() -> Self {
+    /// Creates a profile pre-stamped with the v2 schema version in slot `0x0000`.
+    pub fn with_schema_v2() -> Self {
         let mut profile = Self::new();
         profile.set(
             standard::SCHEMA_VERSION,
-            Value::U16(standard::SCHEMA_VERSION_V1),
+            Value::U16(standard::SCHEMA_VERSION_V2),
         );
         profile
     }
@@ -84,8 +84,7 @@ impl Profile {
     /// Extracts the cryptographic-key view from the standard key slots (the DID→keys resolution).
     pub fn resolve_keys(&self) -> DidKeys {
         DidKeys {
-            signing_public_key: self.bytes32(standard::SIGNING_PUBLIC_KEY),
-            encryption_public_key: self.bytes32(standard::ENCRYPTION_PUBLIC_KEY),
+            bls_g1_public_key: self.bytes48(standard::BLS_G1_PUBLIC_KEY),
             peer_id: self.bytes32(standard::PEER_ID),
             key_epoch: match self.get(standard::KEY_EPOCH) {
                 Some(Value::U32(v)) => Some(*v),
@@ -120,6 +119,17 @@ impl Profile {
     fn bytes32(&self, slot: SlotId) -> Option<[u8; 32]> {
         match self.get(slot) {
             Some(Value::Bytes(b)) if b.len() == 32 => Some(b.as_slice().try_into().ok()?),
+            _ => None,
+        }
+    }
+
+    /// Reads a `Bytes` slot as a 48-byte array, or `None` when unset or not exactly 48 bytes.
+    ///
+    /// The 48-byte width is the compressed BLS12-381 G1 identity key (slot `0x0010`, §6a). A slot
+    /// carrying the wrong length is treated as absent — a consumer never receives a malformed key.
+    fn bytes48(&self, slot: SlotId) -> Option<[u8; 48]> {
+        match self.get(slot) {
+            Some(Value::Bytes(b)) if b.len() == 48 => Some(b.as_slice().try_into().ok()?),
             _ => None,
         }
     }

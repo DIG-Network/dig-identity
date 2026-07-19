@@ -132,9 +132,9 @@ pub enum ResolveError {
     #[error("profile content does not match the store's current on-chain root")]
     StaleOrTamperedRoot,
 
-    /// The DID's authoritative profile publishes no signing public key (slot `0x0010`).
-    #[error("DID profile publishes no signing public key")]
-    NoSigningKey,
+    /// The DID's authoritative profile publishes no BLS12-381 G1 identity key (slot `0x0010`).
+    #[error("DID profile publishes no BLS G1 identity key")]
+    NoIdentityKey,
 
     /// The profile content could not be decoded / its root could not be computed.
     #[error("profile format error: {0}")]
@@ -205,19 +205,21 @@ pub fn resolve_did_keys<S: ChainSource>(
     Ok(resolve_identity_profile(did_uri, source)?.keys())
 }
 
-/// Resolves a DID to its Ed25519 signing public key (slot `0x0010`), chain-authenticated.
+/// Resolves a DID to its BLS12-381 G1 identity public key (slot `0x0010`), chain-authenticated.
 ///
-/// The exact seam dig-node's engine `DidSigningKeyResolver` (#1007) consumes: it returns the 32-byte
-/// signing key or fails closed with [`ResolveError::NoSigningKey`] when the authoritative profile
-/// publishes none — so a caller can only obtain a key that a chain-authenticated DID actually
-/// published, never one attached by an unauthenticated party.
-pub fn resolve_signing_key<S: ChainSource>(
+/// The exact seam dig-message (seal + sender signature) and dig-node's engine `DidSigningKeyResolver`
+/// (#1007) consume: it returns the 48-byte compressed G1 key or fails closed with
+/// [`ResolveError::NoIdentityKey`] when the authoritative profile publishes none — so a caller can
+/// only obtain a key that a chain-authenticated DID actually published, never one attached by an
+/// unauthenticated party. A caller intending to DH against the key MUST still run the §6a.3 subgroup
+/// check ([`crate::bls::g1_dh`] does this internally).
+pub fn resolve_bls_public_key<S: ChainSource>(
     did_uri: &str,
     source: &S,
-) -> Result<[u8; 32], ResolveError> {
+) -> Result<[u8; 48], ResolveError> {
     resolve_did_keys(did_uri, source)?
-        .signing_public_key
-        .ok_or(ResolveError::NoSigningKey)
+        .bls_g1_public_key
+        .ok_or(ResolveError::NoIdentityKey)
 }
 
 /// Wraps a source-specific error into [`ResolveError::Chain`] without requiring `S::Error: 'static`.
@@ -234,8 +236,9 @@ mod tests {
     use chia_protocol::Coin;
     use chia_sdk_utils::Address;
 
-    /// The Ed25519 signing key a well-formed test profile publishes (slot `0x0010`).
-    const SIGNING_KEY: [u8; 32] = [7u8; 32];
+    /// The BLS12-381 G1 identity key a well-formed test profile publishes (slot `0x0010`). Resolution
+    /// only reads the 48 published bytes; it does not curve-validate (the DH path does, §6a.3).
+    const IDENTITY_KEY: [u8; 48] = [7u8; 48];
 
     /// Encodes a `did:chia:` DID string for `launcher_id` via the canonical bech32m codec.
     fn did_for(launcher_id: Bytes32) -> String {
@@ -250,12 +253,12 @@ mod tests {
         Coin::new(parent, Bytes32::new([9u8; 32]), 1)
     }
 
-    /// A profile carrying the standard signing key, plus a display name for realism.
+    /// A profile carrying the standard BLS G1 identity key, plus a display name for realism.
     fn keyed_profile() -> Profile {
-        let mut profile = Profile::with_schema_v1();
+        let mut profile = Profile::with_schema_v2();
         profile.set(
-            standard::SIGNING_PUBLIC_KEY,
-            Value::Bytes(SIGNING_KEY.to_vec()),
+            standard::BLS_G1_PUBLIC_KEY,
+            Value::Bytes(IDENTITY_KEY.to_vec()),
         );
         profile.set(standard::DISPLAY_NAME, Value::Utf8("Ada".into()));
         profile
@@ -335,15 +338,18 @@ mod tests {
         let (source, _coin_id) = MockSource::authoritative(&did_uri);
 
         let keys = resolve_did_keys(&did_uri, &source).unwrap();
-        assert_eq!(keys.signing_public_key, Some(SIGNING_KEY));
+        assert_eq!(keys.bls_g1_public_key, Some(IDENTITY_KEY));
     }
 
     #[test]
-    fn resolves_signing_key_for_engine_resolver() {
+    fn resolves_bls_public_key_for_engine_resolver() {
         let did_uri = did_for(Bytes32::new([42u8; 32]));
         let (source, _) = MockSource::authoritative(&did_uri);
 
-        assert_eq!(resolve_signing_key(&did_uri, &source).unwrap(), SIGNING_KEY);
+        assert_eq!(
+            resolve_bls_public_key(&did_uri, &source).unwrap(),
+            IDENTITY_KEY
+        );
     }
 
     #[test]
@@ -441,7 +447,7 @@ mod tests {
 
         let profile = resolve_identity_profile(&did_uri, &source).unwrap();
         assert_eq!(profile.singleton().coin_id(), cn_plus_1);
-        assert_eq!(profile.keys().signing_public_key, Some(SIGNING_KEY));
+        assert_eq!(profile.keys().bls_g1_public_key, Some(IDENTITY_KEY));
     }
 
     #[test]
@@ -471,22 +477,22 @@ mod tests {
     }
 
     #[test]
-    fn missing_signing_key_fails_closed() {
+    fn missing_identity_key_fails_closed() {
         let did_uri = did_for(Bytes32::new([42u8; 32]));
         let (mut source, _) = MockSource::authoritative(&did_uri);
-        let mut no_key = Profile::with_schema_v1();
+        let mut no_key = Profile::with_schema_v2();
         no_key.set(standard::DISPLAY_NAME, Value::Utf8("Ada".into()));
         source.stores[0].root_hash = root_of(&no_key);
         source.fetched = no_key;
         assert_eq!(
-            resolve_signing_key(&did_uri, &source),
-            Err(ResolveError::NoSigningKey)
+            resolve_bls_public_key(&did_uri, &source),
+            Err(ResolveError::NoIdentityKey)
         );
-        // resolve_did_keys still succeeds (keys are all-None); only the signing-key accessor fails.
+        // resolve_did_keys still succeeds (keys are all-None); only the identity-key accessor fails.
         assert_eq!(
             resolve_did_keys(&did_uri, &source)
                 .unwrap()
-                .signing_public_key,
+                .bls_g1_public_key,
             None
         );
     }
