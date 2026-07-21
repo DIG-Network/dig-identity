@@ -32,8 +32,15 @@ pub use chia_bls::{PublicKey, SecretKey, Signature};
 ///
 /// Every index is hardened. `12381` = the BLS12-381 purpose, `8444` = the Chia coin type, `9` = the
 /// dig-identity application index (DISTINCT from Chia's wallet key index `2` — this key secures no
-/// coins), `0` = the identity key index.
+/// coins), `0` = the identity key index — i.e. profile index `0`, the default profile
+/// ([`derive_identity_sk_at`] generalizes this last hardened component to any profile).
 pub const IDENTITY_DERIVATION_PATH: [u32; 4] = [12381, 8444, 9, 0];
+
+/// The fixed prefix of the dig-identity hardened path — the purpose, coin type, and application index
+/// `m/12381'/8444'/9'` shared by EVERY profile. Only the final hardened component (the profile index)
+/// varies per profile ([`derive_identity_sk_at`]); it is kept PRIVATE so consumers derive through the
+/// functions and never re-assemble the raw path (SPEC §6a.1, dig_ecosystem §4.1).
+const IDENTITY_PATH_PREFIX: [u32; 3] = [12381, 8444, 9];
 
 /// The canonical compressed encoding of the G1 identity element (point at infinity): the compression
 /// and infinity flag bits in the first byte, all coordinate bytes zero (ZCash/Chia BLS12-381
@@ -58,10 +65,31 @@ pub fn master_secret_key_from_seed(seed: &[u8]) -> SecretKey {
 /// Applies the four hardened EIP-2333 steps `m/12381'/8444'/9'/0'` (SPEC §6a.1). The result is the
 /// identity keypair's private scalar; its [`public_key_bytes`] is the 48-byte G1 key published in
 /// slot `0x0010`.
+///
+/// This is the default profile (`profile_ix = 0`): it is byte-identical to
+/// [`derive_identity_sk_at(master, 0)`](derive_identity_sk_at) and delegates to it.
 pub fn derive_identity_sk(master: &SecretKey) -> SecretKey {
-    IDENTITY_DERIVATION_PATH
+    derive_identity_sk_at(master, 0)
+}
+
+/// Derives the dig-identity secret key for a specific PROFILE from a wallet master key, at the
+/// per-profile hardened path `m/12381'/8444'/9'/{profile_ix}'` (SPEC §6a.1).
+///
+/// The purpose (`12381'`), coin type (`8444'`), and application index (`9'`) are the shared
+/// [`IDENTITY_PATH_PREFIX`]; the caller-supplied `profile_ix` is the FINAL hardened component, so
+/// each profile gets an independent, non-custodial identity keypair off the same wallet master. A
+/// wallet with N profiles derives N distinct identity keys — one per `profile_ix` — all off the same
+/// seed, none securing any coins (the `9'` application index is DISTINCT from Chia's wallet coin path
+/// `2'`, §6a.4 point 2).
+///
+/// `profile_ix = 0` is the default profile and is byte-identical to [`derive_identity_sk`] /
+/// [`IDENTITY_DERIVATION_PATH`] — the historical fixed path is exactly profile index 0. This is an
+/// additive generalization (dig_ecosystem §5.1): existing callers are unaffected.
+pub fn derive_identity_sk_at(master: &SecretKey, profile_ix: u32) -> SecretKey {
+    let prefixed = IDENTITY_PATH_PREFIX
         .iter()
-        .fold(master.clone(), |sk, &index| sk.derive_hardened(index))
+        .fold(master.clone(), |sk, &index| sk.derive_hardened(index));
+    prefixed.derive_hardened(profile_ix)
 }
 
 /// The 48-byte compressed BLS12-381 G1 public key for a secret key.
@@ -194,6 +222,45 @@ mod tests {
         let a = identity_sk("dig-identity/kat/deterministic");
         let b = identity_sk("dig-identity/kat/deterministic");
         assert_eq!(a.to_bytes(), b.to_bytes());
+    }
+
+    /// Byte-identity invariant (dig_ecosystem §5.1): `derive_identity_sk` is exactly profile 0, so the
+    /// generalized `derive_identity_sk_at(master, 0)` reproduces the historical fixed-path key to the
+    /// byte — both the private scalar and the published G1 public key.
+    #[test]
+    fn profile_zero_is_byte_identical_to_the_fixed_path() {
+        let master = master_secret_key_from_seed(&seed_from_label("dig-identity/kat/profile-zero"));
+        let fixed = derive_identity_sk(&master);
+        let profile_zero = derive_identity_sk_at(&master, 0);
+        assert_eq!(profile_zero.to_bytes(), fixed.to_bytes());
+        assert_eq!(public_key_bytes(&profile_zero), public_key_bytes(&fixed));
+    }
+
+    /// Per-profile derivation is deterministic and each profile index yields a DISTINCT key — profile
+    /// 1 differs from profile 0, and the generalized path matches the manual EIP-2333 chain at
+    /// `m/12381'/8444'/9'/{profile_ix}'`.
+    #[test]
+    fn per_profile_derivation_is_distinct_and_matches_manual_chain() {
+        let master = master_secret_key_from_seed(&seed_from_label("dig-identity/kat/per-profile"));
+
+        let profile_zero = derive_identity_sk_at(&master, 0);
+        let profile_one = derive_identity_sk_at(&master, 1);
+        let profile_two = derive_identity_sk_at(&master, 2);
+        assert_ne!(profile_one.to_bytes(), profile_zero.to_bytes());
+        assert_ne!(profile_two.to_bytes(), profile_one.to_bytes());
+
+        // Deterministic: same master + index reproduces the same key.
+        assert_eq!(
+            derive_identity_sk_at(&master, 1).to_bytes(),
+            profile_one.to_bytes()
+        );
+
+        // Matches the manual hardened chain m/12381'/8444'/9'/1'.
+        let mut reference = master.clone();
+        for index in [12381u32, 8444, 9, 1] {
+            reference = reference.derive_hardened(index);
+        }
+        assert_eq!(profile_one.to_bytes(), reference.to_bytes());
     }
 
     /// The load-bearing non-custodial property (§6a.4 point 2): the identity key at purpose `9'`
