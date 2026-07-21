@@ -89,8 +89,9 @@ pub use resolve::{
 // The BLS12-381 G1 identity key model (§6a), behind the default-on `bls` feature.
 #[cfg(feature = "bls")]
 pub use bls::{
-    derive_identity_sk, g1_dh, g1_subgroup_check, master_secret_key_from_seed, public_key_bytes,
-    sign_message, verify_signature, IDENTITY_DERIVATION_PATH,
+    derive_identity_sk, derive_identity_sk_at, g1_dh, g1_subgroup_check,
+    master_secret_key_from_seed, public_key_bytes, sign_message, verify_signature,
+    IDENTITY_DERIVATION_PATH,
 };
 pub use slot::SlotId;
 pub use tree::ProfileTree;

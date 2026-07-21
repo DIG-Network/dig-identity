@@ -214,19 +214,28 @@ The identity secret key is derived from the wallet master secret via EIP-2333 ha
 canonical dig-identity path, all indices hardened:
 
 ```
-m / 12381' / 8444' / 9' / 0'
+m / 12381' / 8444' / 9' / {profile_ix}'
 ```
 
 - `12381'` — the BLS12-381 purpose (Chia convention).
 - `8444'` — the Chia coin type.
 - `9'` — the dig-identity application index (**purpose 9**), DISTINCT from Chia's wallet/coin
   key index `2'` (`m/12381'/8444'/2'/n`).
-- `0'` — the identity key index within the dig-identity application.
+- `{profile_ix}'` — the **profile index** within the dig-identity application: the FINAL hardened
+  component, one hardened index per identity profile off the same wallet master. Profile index `0`
+  (`m/12381'/8444'/9'/0'`) is the DEFAULT profile — the canonical single-profile path
+  (`IDENTITY_DERIVATION_PATH`). `derive_identity_sk_at(master, profile_ix)` derives the key for an
+  arbitrary profile; `derive_identity_sk(master)` is exactly `derive_identity_sk_at(master, 0)`.
 
 The distinctness of `9'` from the wallet coin path `2'` is **LOAD-BEARING** (§6a.4 point 2): the
 identity key derived here secures NO coins, so a confused-deputy signature on it authorizes nothing
 of value. Implementations MUST derive the identity key at this exact path and MUST NOT reuse a wallet
 coin-custody key as the identity key.
+
+**Per-profile byte-identity invariant (HARD, §2.4/dig_ecosystem §5.1).** Generalizing the final
+component to `profile_ix` is ADDITIVE: `derive_identity_sk_at(master, 0)` MUST be byte-identical to
+`derive_identity_sk(master)` (the historical fixed path `m/12381'/8444'/9'/0'` IS profile index 0).
+Distinct `profile_ix` values yield independent, deterministic identity keypairs.
 
 ### 6a.2 The two uses of the one key
 
@@ -271,9 +280,15 @@ from dig-message §5.1a/§5.7):
 
 ### 6a.5 Key-model primitives (public API)
 
-- `IDENTITY_DERIVATION_PATH: [u32; 4]` = `[12381, 8444, 9, 0]` — the §6a.1 hardened path indices.
+- `IDENTITY_DERIVATION_PATH: [u32; 4]` = `[12381, 8444, 9, 0]` — the §6a.1 default-profile (index 0)
+  hardened path indices. The `m/12381'/8444'/9'` prefix is PRIVATE; consumers derive through the
+  functions and never re-assemble the raw path.
 - `master_secret_key_from_seed(seed) → SecretKey` — the EIP-2333 master (`from_seed`).
-- `derive_identity_sk(master) → SecretKey` — applies the §6a.1 hardened path to a master key.
+- `derive_identity_sk(master) → SecretKey` — the default profile (index 0); equal to
+  `derive_identity_sk_at(master, 0)`.
+- `derive_identity_sk_at(master, profile_ix: u32) → SecretKey` — the per-profile key at
+  `m/12381'/8444'/9'/{profile_ix}'` (§6a.1). `profile_ix = 0` is byte-identical to
+  `derive_identity_sk`.
 - `g1_subgroup_check(pk: &[u8; 48]) → bool` — §6a.3.
 - `g1_dh(sk: &SecretKey, peer_g1: &[u8; 48]) → Option<[u8; 48]>` — §6a.2/§6a.3 (validated DH).
 - `sign_message(sk: &SecretKey, msg: &[u8]) → [u8; 96]` and
@@ -283,7 +298,10 @@ from dig-message §5.1a/§5.7):
 ### 6a.6 Conformance vectors (§9)
 
 A conforming implementation MUST reproduce: (a) the §6a.1 derivation KAT — a fixed seed → the golden
-48-byte G1 public key at `m/12381'/8444'/9'/0'` (byte-agreeing with `chia-wallet-sdk`'s derivation);
+48-byte G1 public key at `m/12381'/8444'/9'/0'` (byte-agreeing with `chia-wallet-sdk`'s derivation),
+AND the per-profile KAT: `derive_identity_sk_at(master, 0)` reproduces that same golden (byte-identity
+invariant) while `derive_identity_sk_at(master, 1)` reproduces its own DISTINCT frozen golden at
+`m/12381'/8444'/9'/1'`;
 (b) the §6a.2 G1-ECDH round-trip — `g1_dh(a_sk, b_pk) == g1_dh(b_sk, a_pk)`; (c) the self-DH case —
 `g1_dh(sk, own_pk)` is valid and non-degenerate; (d) sign/verify round-trip + the sign/DH
 domain-separation property; (e) the §6a.3 subgroup check REJECTING the identity/infinity point and a
