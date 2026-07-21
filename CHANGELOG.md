@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org) and
 [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.5.0] - 2026-07-21
+
+### Features
+- **bls:** Per-profile identity derivation derive_identity_sk_at (#1024) (#7)
+
 ## [0.4.2] - 2026-07-19
 
 ### Documentation
