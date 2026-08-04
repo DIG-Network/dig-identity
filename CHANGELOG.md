@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org) and
 [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.6.0] - 2026-08-04
+
+### Miscellaneous Tasks
+- **deps:** Migrate to chia-protocol 0.36.1 / chia-sdk-utils 0.34 / chia-bls 0.36.1 (dig_ecosystem#2140)
+
 ## [0.5.0] - 2026-07-21
 
 ### Features
