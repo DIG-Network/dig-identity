@@ -95,9 +95,17 @@ impl IdentityProfile {
     /// only), so the launch driver cannot live here: it ships one level up, as
     /// `dig_social_profile::IdentityProfile::mint_from_did`. Reach for that when you need to mint.
     ///
-    /// The signature is retained here so consumers can code against the primitive's final shape; the
-    /// chain-capable version also yields the launch `SpendBundle` (and takes the owner delegation)
-    /// alongside `Self`.
+    /// The signature is retained here only as a typed, fail-closed placeholder — it is NOT the shape
+    /// of the chain-capable driver. That driver is
+    /// `dig_social_profile::IdentityProfile::mint_from_did(did, did_coin, owner, owner_puzzle_hash,
+    /// size, seed_metadata, fee)`, and it returns an `IdentityProfileMint`
+    /// (`{ did, metadata, root, launch_spend }`) — deliberately NOT a resolved profile.
+    ///
+    /// That refusal is a money-correctness invariant: a mint is only a SUBMITTED spend until the chain
+    /// confirms it, so no resolved `IdentityProfile` is ever fabricated pre-confirmation. The resolved
+    /// value is obtained AFTER confirmation, via `dig_social_profile::resolve::resolve_identity_profile`.
+    /// Code against `IdentityProfileMint` plus that post-confirmation resolve — never against a
+    /// profile returned by minting.
     pub fn mint_from_did(
         _did_coin: Coin,
         _owner_puzzle_hash: Bytes32,

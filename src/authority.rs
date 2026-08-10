@@ -9,7 +9,7 @@
 //! 2. **Delegate** — the caller holds a CURRENTLY-VALID CHIP-0035 writer/admin delegation on the
 //!    store (not revoked, not past its expiry height).
 //!
-//! An [`DelegationKind::Oracle`] delegation grants a READ-FEE right, **NOT** write authority, so it
+//! An `Oracle` delegation ([`DelegationKind::Oracle`]) grants a READ-FEE right, **NOT** write authority, so it
 //! NEVER authorizes an update. That distinction is the security property this module exists to hold.
 //!
 //! # This module is the DECISION only
@@ -106,6 +106,17 @@ impl StoreUpdateAuthority {
     /// True iff the caller is the current owner OR holds a currently-valid write-granting delegation.
     /// Fails closed: an unknown caller, a revoked or expired delegation, or an oracle-only delegation
     /// all return `false`.
+    ///
+    /// # Misuse boundary (MUST read)
+    ///
+    /// This is a **pre-flight predicate over chain facts the CALLER has already authenticated**. It
+    /// MUST NOT be evaluated over data supplied by the party being authorized: whoever controls
+    /// `owner_puzzle_hash` or `delegations` controls the answer outright. Resolve those fields from
+    /// chain (see [`crate::resolve`]'s trust model) before calling.
+    ///
+    /// A `true` here is NOT proof of on-chain authority — only the chain, accepting the spend, is
+    /// that. Use this to decide whether an update is worth ATTEMPTING (and to fail fast when it is
+    /// plainly not), never as the sole authorization for an action with consequences.
     #[must_use]
     pub fn authorizes(&self, caller_puzzle_hash: Bytes32) -> bool {
         if caller_puzzle_hash == self.owner_puzzle_hash {
@@ -209,5 +220,84 @@ mod tests {
         let mut revoked = delegation(WRITER, DelegationKind::Writer);
         revoked.revoked = true;
         assert!(authority(vec![revoked], 100).authorizes(ph(OWNER)));
+    }
+
+    /// The owner short-circuit must hold against an EXPIRED delegation too, not only a revoked one.
+    ///
+    /// The revoked case above leaves the expiry arm of the short-circuit unexercised: an
+    /// implementation that returned early only when every delegation is revoked would still pass it.
+    #[test]
+    fn owner_is_authorized_even_when_a_delegation_is_expired() {
+        let mut expired = delegation(WRITER, DelegationKind::Writer);
+        expired.expires_at_height = Some(50);
+        assert!(authority(vec![expired], 100).authorizes(ph(OWNER)));
+    }
+
+    /// `expires_at_height = Some(0)` is a delegation that is NEVER valid: no height is `< 0`.
+    ///
+    /// It is the degenerate end of the strictly-less-than rule and is easy to special-case wrongly
+    /// (treating `Some(0)` as "no expiry"), which would fail OPEN. SPEC §8.3 states it normatively.
+    #[test]
+    fn delegation_expiring_at_height_zero_never_authorizes() {
+        let mut never_valid = delegation(WRITER, DelegationKind::Writer);
+        never_valid.expires_at_height = Some(0);
+        assert!(!authority(vec![never_valid.clone()], 0).authorizes(ph(WRITER)));
+        assert!(!authority(vec![never_valid], 100).authorizes(ph(WRITER)));
+    }
+
+    /// SPEC §8.3 requires SOME recorded delegation to authorize — an existential over the whole list.
+    ///
+    /// Every other test here carries zero or one delegation, so all of them pass an implementation
+    /// that inspects only the FIRST entry (`delegations.first().is_some_and(..)`). This fixture puts a
+    /// NON-authorizing delegation for the caller FIRST — same delegate, `Oracle`, i.e. a match on the
+    /// delegate that fails on kind — and the authorizing one SECOND, so a first-only implementation
+    /// answers `false` where the spec requires `true`.
+    #[test]
+    fn a_later_delegation_authorizes_when_an_earlier_one_does_not() {
+        let auth = authority(
+            vec![
+                delegation(WRITER, DelegationKind::Oracle),
+                delegation(WRITER, DelegationKind::Writer),
+            ],
+            100,
+        );
+        assert!(auth.authorizes(ph(WRITER)));
+    }
+
+    /// A puzzle hash differing from the owner's in its LAST byte only.
+    ///
+    /// Every other fixture is `[byte; 32]`, so any two differ in EVERY byte — under which a comparison
+    /// narrowed to one byte, or truncated to a prefix, still separates them. These twins do not.
+    fn twin(last_byte: u8) -> Bytes32 {
+        let mut bytes = [0xAA; 32];
+        bytes[31] = last_byte;
+        Bytes32::new(bytes)
+    }
+
+    #[test]
+    fn a_puzzle_hash_differing_only_in_its_last_byte_is_not_the_owner() {
+        let auth = StoreUpdateAuthority {
+            owner_puzzle_hash: twin(0xAA),
+            delegations: vec![],
+            current_height: 100,
+        };
+        assert!(auth.authorizes(twin(0xAA)));
+        assert!(!auth.authorizes(twin(0xAB)));
+    }
+
+    #[test]
+    fn a_delegation_does_not_authorize_a_twin_differing_only_in_its_last_byte() {
+        let auth = StoreUpdateAuthority {
+            owner_puzzle_hash: ph(OWNER),
+            delegations: vec![WriterDelegation {
+                delegate_puzzle_hash: twin(0xAA),
+                kind: DelegationKind::Writer,
+                revoked: false,
+                expires_at_height: None,
+            }],
+            current_height: 100,
+        };
+        assert!(auth.authorizes(twin(0xAA)));
+        assert!(!auth.authorizes(twin(0xAB)));
     }
 }

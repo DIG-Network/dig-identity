@@ -547,6 +547,15 @@ Admin, Oracle }`.
    - it has not expired: `expires_at_height` is `None` (never expires), or
      `current_height < expires_at_height`. The comparison is STRICTLY LESS THAN — a delegation is
      valid at every height BELOW its expiry and invalid at `expires_at_height` itself and above.
+     `expires_at_height = Some(0)` therefore denotes a delegation that is NEVER valid, since no
+     height is below zero; an implementation MUST NOT treat it as "no expiry".
+
+The delegate arm is EXISTENTIAL over the whole list, so a stale entry anywhere in it grants authority.
+A conforming `StoreUpdateAuthority` MUST therefore contain AT MOST ONE delegation per
+`delegate_puzzle_hash`, and a revocation MUST be reflected by setting `revoked = true` on that single
+entry — NEVER by appending an additional tombstone record beside a stale live one. A source that
+appends instead of updating composes FAIL-OPEN: the stale live entry would still authorize a revoked
+delegate. Producers of this record own that invariant; the predicate does not re-derive it.
 
 The predicate is TOTAL and MUST fail CLOSED: an unknown caller, a caller matching no delegation, a
 revoked delegation, an expired delegation, and an oracle-only delegation each yield `false`. The
@@ -556,7 +565,14 @@ Testable requirements a conforming implementation MUST satisfy:
 
 - an `Oracle` delegation for the caller yields `false`;
 - with `expires_at_height = Some(h)`, the caller is authorized at `h - 1` and NOT at `h`;
-- the owner is authorized when its only delegation is revoked.
+- the owner is authorized when its only delegation is revoked;
+- the owner is authorized when its only delegation is EXPIRED (the short-circuit covers both);
+- with two recorded delegations for the caller where the FIRST does not authorize (e.g. `Oracle`) and
+  the SECOND does, the result is `true` — the delegate arm is existential over the whole list, not a
+  test of the first entry;
+- with `expires_at_height = Some(0)`, the caller is NOT authorized at any height, including `0`;
+- a caller whose puzzle hash differs from the owner's (or from a delegate's) in a SINGLE byte is NOT
+  authorized — puzzle-hash equality is over all 32 bytes.
 
 ## 9. Conformance
 
