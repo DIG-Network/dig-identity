@@ -115,3 +115,82 @@ pub mod standard {
     /// The schema version this crate writes (v2 — the BLS-G1-only key model).
     pub const SCHEMA_VERSION_V2: u16 = 2;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn to_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// Pins the slot-key derivation to its FROZEN output for two standard slots.
+    ///
+    /// These digests were captured from dig-identity v0.4.2 and are a permanent, on-chain-anchored
+    /// contract (§5.1): a drift moves the field's position in every published profile's tree and
+    /// silently invalidates every proof ever written against it.
+    ///
+    /// `tests/format.rs::slot_key_matches_documented_preimage` is a genuinely independent check of the
+    /// DOMAIN: it hardcodes the `"dig-identity:slot:"` literal rather than referencing
+    /// `SLOT_KEY_DOMAIN`, so a change to that constant DOES fail it. What it cannot see is a change
+    /// INSIDE the shared machinery it reuses — `hash::sha256` and the `u32` big-endian widening are
+    /// the same code production runs, so swapping either would move both sides together and the test
+    /// would stay green. This frozen vector is external to the entire derivation and fails if ANY
+    /// input to it moves — domain, widening, or hash.
+    #[test]
+    fn slot_key_derivation_is_frozen() {
+        assert_eq!(
+            to_hex(&standard::SCHEMA_VERSION.key()),
+            "b57afbeb86bb7c09c73cbb809ca1f24198610f8d4a642c08c3bbd101bc72dd9e"
+        );
+        assert_eq!(
+            to_hex(&standard::DISPLAY_NAME.key()),
+            "d504c074b73a0c7e62ff69fc7f5ce0e278d0350ea9277385480587a4d29836d7"
+        );
+    }
+
+    /// How many of the four range predicates claim `id`. A partition means EXACTLY one, always.
+    fn matching_range_count(id: SlotId) -> usize {
+        [
+            id.is_future_standard(),
+            id.is_ecosystem_extension(),
+            id.is_custom(),
+            id.is_encrypted_reserved(),
+        ]
+        .into_iter()
+        .filter(|matched| *matched)
+        .count()
+    }
+
+    /// The four reserved ranges PARTITION `0x0000..=0xFFFF`: no gap and no overlap.
+    ///
+    /// `tests/format.rs::reserved_ranges_classify_correctly` pins each range's FIRST id only, so it
+    /// cannot see a boundary that has drifted upward. Asserting the expected predicate at both ENDS
+    /// is still not enough either: a widened lower bound (say `is_custom` becoming `self.0 >= 0x1000`)
+    /// leaves every such assertion true while `0xF000` falls in TWO ranges. So this counts how many
+    /// predicates claim each probe and requires the count to be EXACTLY ONE — which is the partition
+    /// property itself, not merely the tiling half of it.
+    #[test]
+    fn slot_id_ranges_partition_the_id_space() {
+        assert!(SlotId(0x0000).is_future_standard());
+        assert!(SlotId(0x00FF).is_future_standard());
+        assert!(SlotId(0x0100).is_ecosystem_extension());
+        assert!(SlotId(0x0FFF).is_ecosystem_extension());
+        assert!(SlotId(0x1000).is_custom());
+        assert!(SlotId(0xEFFF).is_custom());
+        assert!(SlotId(0xF000).is_encrypted_reserved());
+        assert!(SlotId(0xFFFF).is_encrypted_reserved());
+
+        for raw in [
+            0x0000, 0x0080, 0x00FF, 0x0100, 0x0800, 0x0FFF, 0x1000, 0x8000, 0xEFFF, 0xF000, 0xF800,
+            0xFFFF,
+        ] {
+            let id = SlotId(raw);
+            assert_eq!(
+                matching_range_count(id),
+                1,
+                "slot id {raw:#06x} must belong to exactly one reserved range"
+            );
+        }
+    }
+}

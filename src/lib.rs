@@ -29,6 +29,7 @@
 //! | Composed "this datum belongs to this DID" verification | [`verify`] |
 //! | On-chain DID→profile resolution over a caller [`ChainSource`] (WU3) | [`resolve`] |
 //! | The BLS12-381 G1 identity key model: derivation + sign/seal primitives (§6a) | [`bls`] |
+//! | The fail-closed store-update-authority predicate (owner or valid delegate) | [`authority`] |
 //!
 //! ## Proving a field against a root
 //!
@@ -51,6 +52,7 @@
 //! assert!(proof::verify_non_membership(&root, standard::PEER_ID, &absent).unwrap());
 //! ```
 
+pub mod authority;
 #[cfg(feature = "bls")]
 pub mod bls;
 pub mod did;
@@ -68,6 +70,7 @@ pub mod value;
 pub mod verify;
 pub mod xch;
 
+pub use authority::{DelegationKind, StoreUpdateAuthority, WriterDelegation};
 pub use did::{parse_did_from_description, Did};
 pub use error::{Error, Result};
 pub use identity_profile::IdentityProfile;

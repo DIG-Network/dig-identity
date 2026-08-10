@@ -90,11 +90,22 @@ impl IdentityProfile {
     /// Mints a brand-new identity profile: launches a DID and a chip35 store launched from it, seeded
     /// with `seed_metadata`. **NOT YET IMPLEMENTED** — always returns [`Error::MintNotYetImplemented`].
     ///
-    /// Minting builds on-chain spends and is GATED on the dig-store crate (#703/#754) and the WU3
-    /// chain layer (#778). dig-identity MUST NOT depend on dig-store (the dependency graph stays
-    /// acyclic), so the launch driver ships as a WU2 follow-on rather than here. The signature is
-    /// present now so consumers can code against the primitive's final shape; when the gate lifts it
-    /// will also yield the launch `SpendBundle` (and take the owner delegation) alongside `Self`.
+    /// Minting builds on-chain spends, which requires `dig-store`. dig-identity is a level-00 crate
+    /// and MUST NOT depend on `dig-store` (the dependency graph stays acyclic and reference-down
+    /// only), so the launch driver cannot live here: it ships one level up, as
+    /// `dig_social_profile::IdentityProfile::mint_from_did`. Reach for that when you need to mint.
+    ///
+    /// The signature is retained here only as a typed, fail-closed placeholder — it is NOT the shape
+    /// of the chain-capable driver. That driver is
+    /// `dig_social_profile::IdentityProfile::mint_from_did(did, did_coin, owner, owner_puzzle_hash,
+    /// size, seed_metadata, fee)`, and it returns an `IdentityProfileMint`
+    /// (`{ did, metadata, root, launch_spend }`) — deliberately NOT a resolved profile.
+    ///
+    /// That refusal is a money-correctness invariant: a mint is only a SUBMITTED spend until the chain
+    /// confirms it, so no resolved `IdentityProfile` is ever fabricated pre-confirmation. The resolved
+    /// value is obtained AFTER confirmation, via `dig_social_profile::resolve::resolve_identity_profile`.
+    /// Code against `IdentityProfileMint` plus that post-confirmation resolve — never against a
+    /// profile returned by minting.
     pub fn mint_from_did(
         _did_coin: Coin,
         _owner_puzzle_hash: Bytes32,
