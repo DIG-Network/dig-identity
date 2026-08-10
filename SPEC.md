@@ -517,7 +517,46 @@ Every failure fails CLOSED (`ResolveError`): `InvalidDid`, `NoIdentitySingleton`
 `AmbiguousProfile`, `StaleOrTamperedRoot`, `NoIdentityKey`, `Format`, `Chain`. A resolver NEVER yields
 authority it could not fully authenticate against the chain.
 
-The DID→dig-store minting driver (WU2, `mint_from_did`) remains a follow-on (§8.1).
+The DID→dig-store minting driver (`mint_from_did`) is NOT part of this crate: it builds on-chain
+spends and therefore requires `dig-store`, which a level-00 crate MUST NOT depend on. It lives one
+level up, as `dig_social_profile::IdentityProfile::mint_from_did` (§8.1).
+
+## 8.3 Store update authority (NORMATIVE)
+
+A profile's SMT root advances ONLY by a spend of its store singleton that the chain accepts. This
+section defines the predicate that decides whether a caller MAY produce that spend. The predicate is
+PURE and chain-independent: it decides over already-resolved chain facts. Resolving those facts (the
+owner puzzle hash, the recorded delegations, the current height) and building the resulting update
+spend are OUT of scope here and live in a higher-level crate, for the same layering reason as §8.1.
+
+The authority record is `StoreUpdateAuthority = { owner_puzzle_hash: Bytes32, delegations:
+[WriterDelegation], current_height: u32 }`, where `WriterDelegation = { delegate_puzzle_hash: Bytes32,
+kind: DelegationKind, revoked: bool, expires_at_height: Option<u32> }` and `DelegationKind ∈ { Writer,
+Admin, Oracle }`.
+
+`StoreUpdateAuthority::authorizes(caller_puzzle_hash)` MUST return `true` iff EITHER:
+
+1. **Owner.** `caller_puzzle_hash == owner_puzzle_hash`. This check MUST be evaluated FIRST and MUST
+   short-circuit: an owner is authorized regardless of the state of any delegation, including a
+   revoked or expired one.
+2. **Delegate.** SOME recorded delegation satisfies ALL FOUR of:
+   - `delegate_puzzle_hash == caller_puzzle_hash`;
+   - `kind.grants_update()` is `true`, which holds for `Writer` and `Admin` ONLY. An `Oracle`
+     delegation is a READ-FEE right and MUST NEVER grant update authority.
+   - `revoked` is `false`; and
+   - it has not expired: `expires_at_height` is `None` (never expires), or
+     `current_height < expires_at_height`. The comparison is STRICTLY LESS THAN — a delegation is
+     valid at every height BELOW its expiry and invalid at `expires_at_height` itself and above.
+
+The predicate is TOTAL and MUST fail CLOSED: an unknown caller, a caller matching no delegation, a
+revoked delegation, an expired delegation, and an oracle-only delegation each yield `false`. The
+predicate MUST NOT perform any I/O and MUST NOT consult state other than its own fields.
+
+Testable requirements a conforming implementation MUST satisfy:
+
+- an `Oracle` delegation for the caller yields `false`;
+- with `expires_at_height = Some(h)`, the caller is authorized at `h - 1` and NOT at `h`;
+- the owner is authorized when its only delegation is revoked.
 
 ## 9. Conformance
 

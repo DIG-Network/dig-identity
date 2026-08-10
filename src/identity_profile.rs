@@ -90,11 +90,14 @@ impl IdentityProfile {
     /// Mints a brand-new identity profile: launches a DID and a chip35 store launched from it, seeded
     /// with `seed_metadata`. **NOT YET IMPLEMENTED** — always returns [`Error::MintNotYetImplemented`].
     ///
-    /// Minting builds on-chain spends and is GATED on the dig-store crate (#703/#754) and the WU3
-    /// chain layer (#778). dig-identity MUST NOT depend on dig-store (the dependency graph stays
-    /// acyclic), so the launch driver ships as a WU2 follow-on rather than here. The signature is
-    /// present now so consumers can code against the primitive's final shape; when the gate lifts it
-    /// will also yield the launch `SpendBundle` (and take the owner delegation) alongside `Self`.
+    /// Minting builds on-chain spends, which requires `dig-store`. dig-identity is a level-00 crate
+    /// and MUST NOT depend on `dig-store` (the dependency graph stays acyclic and reference-down
+    /// only), so the launch driver cannot live here: it ships one level up, as
+    /// `dig_social_profile::IdentityProfile::mint_from_did`. Reach for that when you need to mint.
+    ///
+    /// The signature is retained here so consumers can code against the primitive's final shape; the
+    /// chain-capable version also yields the launch `SpendBundle` (and takes the owner delegation)
+    /// alongside `Self`.
     pub fn mint_from_did(
         _did_coin: Coin,
         _owner_puzzle_hash: Bytes32,
