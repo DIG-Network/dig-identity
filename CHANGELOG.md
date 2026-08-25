@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org) and
 [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.7.1] - 2026-08-25
+
+### Chores
+- **deps:** Bump chia-sdk-utils to 0.36 (#10)
+
 ## [0.7.0] - 2026-08-10
 
 ### Features
