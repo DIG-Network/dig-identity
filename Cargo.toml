@@ -1,6 +1,6 @@
 [package]
 name = "dig-identity"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 rust-version = "1.75"
 description = "Canonical DIG decentralized-identity profile format: a standard, additive sparse-merkle-tree of profile slots (keys, display fields) paired with a Chia identity singleton (DID) via a chip35 DataLayer store. Pure format + membership/non-membership proof + DID-store pairing predicate layer (chain-independent)."
@@ -20,7 +20,7 @@ sha2 = "0.10"
 # so a DID launcher id / coin lineage byte-agrees everywhere — never a hand-rolled 32-byte/coin type.
 chia-protocol = "0.36.1"
 # The canonical bech32m Address codec used to parse `did:chia:` DID strings into their launcher id.
-chia-sdk-utils = "0.34"
+chia-sdk-utils = "0.36"
 # Structured errors on the public API.
 thiserror = "2"
 
